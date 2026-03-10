@@ -34,7 +34,7 @@ struct ContentView: View {
         ZStack {
             LitterTheme.backgroundGradient.ignoresSafeArea()
 
-            mainContent(bottomInset: geometry.safeAreaInsets.bottom)
+            mainContent(topInset: geometry.safeAreaInsets.top, bottomInset: geometry.safeAreaInsets.bottom)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
                 .overlay(alignment: .top) {
@@ -133,10 +133,10 @@ struct ContentView: View {
             }
     }
 
-    private func mainContent(bottomInset: CGFloat) -> some View {
+    private func mainContent(topInset: CGFloat, bottomInset: CGFloat) -> some View {
         Group {
             if serverManager.activeThreadKey != nil {
-                ConversationView(bottomInset: bottomInset)
+                ConversationView(topInset: topInset, bottomInset: bottomInset)
             } else {
                 HomeNavigationView()
                     .environmentObject(serverManager)

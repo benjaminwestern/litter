@@ -71,8 +71,8 @@ final class CodexIOSUITests: XCTestCase {
     }
 
     private func waitForDiscoveryServers(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let codexRows = app.buttons.matching(identifier: "discovery.server.codex")
-        let sshRows = app.buttons.matching(identifier: "discovery.server.ssh")
+        let codexRows = codexDiscoveryRows(in: app)
+        let sshRows = sshDiscoveryRows(in: app)
         let preferredHost = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", ".203"))
 
         return waitUntil(timeout: timeout) {
@@ -85,8 +85,8 @@ final class CodexIOSUITests: XCTestCase {
         timeout: TimeInterval,
         minimumRows: Int
     ) -> Bool {
-        let codexRows = app.buttons.matching(identifier: "discovery.server.codex")
-        let sshRows = app.buttons.matching(identifier: "discovery.server.ssh")
+        let codexRows = codexDiscoveryRows(in: app)
+        let sshRows = sshDiscoveryRows(in: app)
         let preferredHost = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", ".203"))
         let scanningLabel = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] %@", "Scanning")
@@ -109,26 +109,47 @@ final class CodexIOSUITests: XCTestCase {
         guard discoveryList.waitForExistence(timeout: 8) else { return false }
 
         for _ in 0..<5 {
-            if tapPreferredHostText(in: app, hostFragment: preferredHostFragment) {
+            if tapPreferredDiscoveryRow(in: app, hostFragment: preferredHostFragment) ||
+                tapPreferredHostText(in: app, hostFragment: preferredHostFragment) {
                 return true
             }
             discoveryList.swipeUp()
         }
 
         for _ in 0..<5 {
-            if tapPreferredHostText(in: app, hostFragment: preferredHostFragment) {
+            if tapPreferredDiscoveryRow(in: app, hostFragment: preferredHostFragment) ||
+                tapPreferredHostText(in: app, hostFragment: preferredHostFragment) {
                 return true
             }
             discoveryList.swipeDown()
         }
 
-        let codexRows = app.buttons.matching(identifier: "discovery.server.codex")
+        let codexRows = codexDiscoveryRows(in: app)
         if codexRows.firstMatch.waitForExistence(timeout: 4), codexRows.firstMatch.isHittable {
             codexRows.firstMatch.tap()
             return true
         }
 
         return false
+    }
+
+    private func tapPreferredDiscoveryRow(in app: XCUIApplication, hostFragment: String) -> Bool {
+        let normalized = hostFragment
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+
+        let query = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND identifier CONTAINS[c] %@",
+                "discovery.server.codex.",
+                normalized
+            )
+        )
+        let row = query.firstMatch
+        guard row.waitForExistence(timeout: 1), row.isHittable else { return false }
+        row.tap()
+        return true
     }
 
     private func tapPreferredHostText(in app: XCUIApplication, hostFragment: String) -> Bool {
@@ -289,5 +310,13 @@ final class CodexIOSUITests: XCTestCase {
 
     private func identifiedElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    private func codexDiscoveryRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovery.server.codex."))
+    }
+
+    private func sshDiscoveryRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "discovery.server.ssh."))
     }
 }

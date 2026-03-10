@@ -187,16 +187,49 @@ private final class DirectoryPickerSheetModel: ObservableObject {
         isLoading = true
         errorMessage = nil
 
+        if connection.server.source == .local {
+            await listLocalDirectory(normalizedPath, serverId: serverId)
+        } else {
+            await listRemoteDirectory(normalizedPath, serverId: serverId, connection: connection)
+        }
+
+        if serverId == lastLoadedServerId {
+            isLoading = false
+        }
+    }
+
+    private func listLocalDirectory(_ path: String, serverId: String) async {
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(atPath: path)
+            guard serverId == lastLoadedServerId else { return }
+            var dirs: [String] = []
+            for name in contents {
+                let fullPath = (path as NSString).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir), isDir.boolValue {
+                    dirs.append(name)
+                }
+            }
+            allEntries = dirs.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                currentPath = path
+            }
+        } catch {
+            guard serverId == lastLoadedServerId else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func listRemoteDirectory(_ path: String, serverId: String, connection: ServerConnection) async {
         do {
             let resp = try await connection.execCommand(
-                ["/bin/ls", "-1ap", normalizedPath],
-                cwd: normalizedPath
+                ["/bin/ls", "-1ap", path],
+                cwd: path
             )
             guard serverId == lastLoadedServerId else { return }
 
             if resp.exitCode != 0 {
                 errorMessage = resp.stderr.isEmpty ? "ls failed with code \(resp.exitCode)" : resp.stderr
-                isLoading = false
                 return
             }
 
@@ -207,15 +240,11 @@ private final class DirectoryPickerSheetModel: ObservableObject {
                 .map { String($0.dropLast()) }
                 .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
             withAnimation(.easeInOut(duration: 0.2)) {
-                currentPath = normalizedPath
+                currentPath = path
             }
         } catch {
             guard serverId == lastLoadedServerId else { return }
             errorMessage = error.localizedDescription
-        }
-
-        if serverId == lastLoadedServerId {
-            isLoading = false
         }
     }
 

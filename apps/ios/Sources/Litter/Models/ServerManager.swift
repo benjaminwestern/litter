@@ -812,13 +812,14 @@ final class ServerManager: ObservableObject {
             let skillInputs = skillMentions.map { mention in
                 UserInput(type: "skill", path: mention.path, name: mention.name)
             }
-            try await conn.sendTurn(
+            let resp = try await conn.sendTurn(
                 threadId: key.threadId,
                 text: text,
                 model: model,
                 effort: effort,
                 additionalInput: skillInputs
             )
+            thread.activeTurnId = resp.turnId
         } catch {
             thread.status = .error(error.localizedDescription)
         }
@@ -884,9 +885,11 @@ final class ServerManager: ObservableObject {
     }
 
     func interrupt() async {
-        guard let key = activeThreadKey, let conn = connections[key.serverId] else { return }
-        await conn.interrupt(threadId: key.threadId)
-        threads[key]?.status = .ready
+        guard let key = activeThreadKey,
+              let thread = threads[key],
+              let conn = connections[key.serverId] else { return }
+        guard let turnId = thread.activeTurnId else { return }
+        await conn.interrupt(threadId: key.threadId, turnId: turnId)
     }
 
     // MARK: - Session Refresh
@@ -972,6 +975,7 @@ final class ServerManager: ObservableObject {
             if let threadId = extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .thinking
+                threads[key]?.activeTurnId = extractTurnId(from: data)
             }
 
         case "item/agentMessage/delta":
@@ -1117,11 +1121,15 @@ final class ServerManager: ObservableObject {
             )
             thread.updatedAt = Date()
 
+        case "error", "codex/event/error":
+            handleErrorNotification(serverId: serverId, data: data)
+
         case "turn/completed", "codex/event/task_complete":
             if let threadId = extractThreadId(from: data) {
                 let key = ThreadKey(serverId: serverId, threadId: threadId)
                 threads[key]?.status = .ready
                 threads[key]?.updatedAt = Date()
+                threads[key]?.activeTurnId = nil
                 liveItemMessageIndices[key] = nil
                 liveTurnDiffMessageIndices[key] = nil
                 if activeThreadKey == key {
@@ -1134,6 +1142,7 @@ final class ServerManager: ObservableObject {
                 for (_, thread) in threads where thread.serverId == serverId && thread.hasTurnActive {
                     thread.status = .ready
                     thread.updatedAt = Date()
+                    thread.activeTurnId = nil
                     liveItemMessageIndices[thread.key] = nil
                     liveTurnDiffMessageIndices[thread.key] = nil
                 }
@@ -1159,6 +1168,24 @@ final class ServerManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private func handleErrorNotification(serverId: String, data: Data) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let params = root["params"] as? [String: Any] else { return }
+
+        let errorDict = params["error"] as? [String: Any]
+        let message = (errorDict?["message"] as? String)
+            ?? (params["message"] as? String)
+            ?? "Unknown error"
+
+        let threadId = extractString(params, keys: ["threadId", "thread_id"])
+        let key = resolveThreadKey(serverId: serverId, threadId: threadId)
+        guard let thread = threads[key] else { return }
+
+        thread.messages.append(ChatMessage(role: .system, text: message))
+        thread.status = .error(message)
+        thread.updatedAt = Date()
     }
 
     private func handleSessionConfiguredNotification(serverId: String, data: Data) {
@@ -2132,6 +2159,19 @@ final class ServerManager: ObservableObject {
         }
         guard let params = (try? JSONDecoder().decode(Wrapper.self, from: data))?.params else { return nil }
         return params.threadId ?? params.conversationId
+    }
+
+    private func extractTurnId(from data: Data) -> String? {
+        struct Wrapper: Decodable {
+            struct Params: Decodable {
+                struct Turn: Decodable { let id: String? }
+                let turn: Turn?
+                let turnId: String?
+            }
+            let params: Params?
+        }
+        guard let params = (try? JSONDecoder().decode(Wrapper.self, from: data))?.params else { return nil }
+        return params.turn?.id ?? params.turnId
     }
 
     func syncActiveThreadFromServer() async {

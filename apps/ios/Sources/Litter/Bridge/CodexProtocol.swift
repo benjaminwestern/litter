@@ -277,11 +277,15 @@ struct TurnStartParams: Encodable {
 }
 
 struct TurnStartResponse: Decodable {
-    let turnId: String?
+    struct Turn: Decodable { let id: String }
+    let turn: Turn?
+
+    var turnId: String? { turn?.id }
 }
 
 struct TurnInterruptParams: Encodable {
     let threadId: String
+    let turnId: String
 }
 
 // MARK: - Review

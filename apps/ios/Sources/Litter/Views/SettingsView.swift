@@ -31,7 +31,6 @@ struct SettingsView: View {
                 Form {
                     accountSection
                     serversSection
-                    typographySection
                 }
                 .scrollContentBackground(.hidden)
             }
@@ -189,25 +188,6 @@ struct SettingsView: View {
             }
         } header: {
             Text("Servers")
-                .foregroundColor(LitterTheme.textSecondary)
-        }
-    }
-
-    // MARK: - Typography Section
-
-    private var typographySection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Custom Font")
-                    .font(LitterFont.monospaced(.subheadline))
-                    .foregroundColor(.white)
-                Text("Using Berkeley Mono for app typography.")
-                    .font(LitterFont.monospaced(.caption))
-                    .foregroundColor(LitterTheme.textSecondary)
-            }
-            .listRowBackground(LitterTheme.surface.opacity(0.6))
-        } header: {
-            Text("Typography")
                 .foregroundColor(LitterTheme.textSecondary)
         }
     }

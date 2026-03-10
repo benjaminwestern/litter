@@ -2,7 +2,6 @@ import Foundation
 import Network
 import CryptoKit
 import Security
-
 actor JSONRPCClient {
     private var connection: NWConnection?
     private var receiveTask: Task<Void, Never>?
@@ -31,6 +30,7 @@ actor JSONRPCClient {
             try await waitUntilReady(conn)
             try await performHandshake(on: conn, url: url)
         } catch {
+            conn.stateUpdateHandler = nil
             conn.cancel()
             connection = nil
             throw error
@@ -45,6 +45,7 @@ actor JSONRPCClient {
     func disconnect() {
         receiveTask?.cancel()
         receiveTask = nil
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
         readBuffer = Data()
@@ -346,7 +347,6 @@ actor JSONRPCClient {
     }
 
     private func handleIncomingData(_ data: Data) {
-        
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         let hasId = obj["id"] != nil
         let hasMethod = obj["method"] is String

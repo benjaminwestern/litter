@@ -216,27 +216,28 @@ final class ServerConnection: ObservableObject, Identifiable {
             lower.contains("missing codex-linux-sandbox executable path")
     }
 
+    @discardableResult
     func sendTurn(
         threadId: String,
         text: String,
         model: String? = nil,
         effort: String? = nil,
         additionalInput: [UserInput] = []
-    ) async throws {
+    ) async throws -> TurnStartResponse {
         var inputs: [UserInput] = [UserInput(type: "text", text: text)]
         inputs.append(contentsOf: additionalInput)
-        let _: TurnStartResponse = try await client.sendRequest(
+        return try await client.sendRequest(
             method: "turn/start",
             params: TurnStartParams(threadId: threadId, input: inputs, model: model, effort: effort),
             responseType: TurnStartResponse.self
         )
     }
 
-    func interrupt(threadId: String) async {
+    func interrupt(threadId: String, turnId: String) async {
         struct Empty: Decodable {}
         _ = try? await client.sendRequest(
             method: "turn/interrupt",
-            params: TurnInterruptParams(threadId: threadId),
+            params: TurnInterruptParams(threadId: threadId, turnId: turnId),
             responseType: Empty.self
         )
     }

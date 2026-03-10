@@ -7,6 +7,7 @@ struct ConversationView: View {
     @ObserveInjection var inject
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
+    var topInset: CGFloat = 0
     var bottomInset: CGFloat = 0
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
     @AppStorage("conversationTextSizeStep") private var conversationTextSizeStep = ConversationTextSize.medium.rawValue
@@ -27,6 +28,7 @@ struct ConversationView: View {
             threadStatus: threadStatus,
             activeThreadKey: serverManager.activeThreadKey,
             agentDirectoryVersion: serverManager.agentDirectoryVersion,
+            topInset: topInset,
             textSizeStep: $conversationTextSizeStep,
             inputFocused: $composerFocused,
             onEditUserMessage: editMessage,
@@ -191,6 +193,7 @@ private struct ConversationMessageList: View {
     let threadStatus: ConversationStatus
     let activeThreadKey: ThreadKey?
     let agentDirectoryVersion: Int
+    var topInset: CGFloat = 0
     @Binding var textSizeStep: Int
     let inputFocused: FocusState<Bool>.Binding
     let onEditUserMessage: (ChatMessage) -> Void
@@ -221,8 +224,6 @@ private struct ConversationMessageList: View {
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
-                            Spacer(minLength: 0)
-
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 ForEach(messages) { message in
                                     EquatableMessageBubble(
@@ -241,7 +242,7 @@ private struct ConversationMessageList: View {
                                 }
                             }
                             .padding(.horizontal, 16)
-                            .padding(.top, 16)
+                            .padding(.top, topInset + 56)
 
                             Color.clear
                                 .frame(height: 1)
@@ -256,7 +257,7 @@ private struct ConversationMessageList: View {
                                 .id("bottom")
                                 .padding(.horizontal, 16)
                         }
-                        .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .bottom)
+                        .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
                     }
                     .defaultScrollAnchor(.bottom)
                     .coordinateSpace(name: "conversationScrollArea")
@@ -592,6 +593,10 @@ private struct ConversationInputBar: View {
         !inputText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    private var isTurnActive: Bool {
+        serverManager.activeThread?.hasTurnActive == true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let img = attachedImage {
@@ -877,7 +882,16 @@ private struct ConversationInputBar: View {
                     .padding(.leading, 14)
                     .padding(.vertical, 8)
 
-                if hasText {
+                if isTurnActive {
+                    Button {
+                        Task { await serverManager.interrupt() }
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(.title2))
+                            .foregroundColor(LitterTheme.danger)
+                    }
+                    .padding(.trailing, 4)
+                } else if hasText {
                     Button {
                         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !text.isEmpty else { return }

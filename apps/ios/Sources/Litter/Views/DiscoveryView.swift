@@ -135,10 +135,7 @@ struct DiscoveryView: View {
         ZStack {
             LitterTheme.backgroundGradient.ignoresSafeArea()
             List {
-                if !localServers.isEmpty {
-                    localSection
-                }
-                networkSection
+                serversSection
                 manualSection
             }
             .scrollContentBackground(.hidden)
@@ -156,7 +153,7 @@ struct DiscoveryView: View {
                 }
             }
             ToolbarItem(placement: .principal) {
-                BrandLogo(size: 32)
+                BrandLogo(size: 44)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -236,43 +233,35 @@ struct DiscoveryView: View {
 
     // MARK: - Sections
 
-    private var localSection: some View {
-        Section {
-            ForEach(localServers) { server in
-                serverRow(server)
-            }
-        } header: {
-            Text("This Device")
-                .foregroundColor(LitterTheme.textSecondary)
-        }
-        .listRowBackground(LitterTheme.surface.opacity(0.6))
+    private var allServers: [DiscoveredServer] {
+        localServers + networkServers
     }
 
-    private var networkSection: some View {
+    private var serversSection: some View {
         Section {
-            if networkServers.isEmpty {
+            if allServers.isEmpty {
                 if discovery.isScanning {
                     HStack {
                         ProgressView().tint(LitterTheme.textMuted).scaleEffect(0.7)
-                        Text("Scanning Bonjour + Tailscale...")
+                        Text("Scanning...")
                             .font(LitterFont.monospaced(.footnote))
                             .foregroundColor(LitterTheme.textMuted)
                     }
                     .listRowBackground(LitterTheme.surface.opacity(0.6))
                 } else {
-                    Text("No IPv4 Codex/SSH hosts found via Bonjour/Tailscale")
+                    Text("No servers found")
                         .font(LitterFont.monospaced(.footnote))
                         .foregroundColor(LitterTheme.textMuted)
                         .listRowBackground(LitterTheme.surface.opacity(0.6))
                 }
             } else {
-                ForEach(networkServers) { server in
+                ForEach(allServers) { server in
                     serverRow(server)
                 }
             }
         } header: {
             HStack(spacing: 8) {
-                Text("Network")
+                Text("Servers")
                     .foregroundColor(LitterTheme.textSecondary)
                 Spacer()
                 if discovery.isScanning {
@@ -307,7 +296,7 @@ struct DiscoveryView: View {
     // MARK: - Row
 
     private func serverRow(_ server: DiscoveredServer) -> some View {
-        let rowIdentifier = server.hasCodexServer ? "discovery.server.codex" : "discovery.server.ssh"
+        let rowIdentifier = serverRowAccessibilityIdentifier(for: server)
         return Button {
             handleTap(server)
         } label: {
@@ -347,6 +336,16 @@ struct DiscoveryView: View {
         .disabled(connectingServer != nil || wakingServer != nil)
     }
 
+    private func serverRowAccessibilityIdentifier(for server: DiscoveredServer) -> String {
+        let kind = server.hasCodexServer ? "codex" : "ssh"
+        let host = server.hostname
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        return "discovery.server.\(kind).\(host)"
+    }
+
     private func serverSubtitle(_ server: DiscoveredServer) -> String {
         if server.source == .local { return "In-process server" }
         var parts = [server.hostname]
@@ -365,10 +364,18 @@ struct DiscoveryView: View {
         Task { await handleTapAsync(server) }
     }
 
+    private func navigateAfterConnect(_ server: DiscoveredServer) {
+        if serverManager.connections[server.id]?.authStatus == .notLoggedIn {
+            showSettings = true
+        } else {
+            onServerSelected?(server)
+        }
+    }
+
     @MainActor
     private func handleTapAsync(_ server: DiscoveredServer) async {
         if serverManager.connections[server.id]?.isConnected == true {
-            onServerSelected?(server)
+            navigateAfterConnect(server)
             return
         }
 
@@ -568,11 +575,13 @@ struct DiscoveryView: View {
                 switch state {
                 case .ready:
                     if gate.markResumed() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         continuation.resume(returning: true)
                     }
                 case .failed, .cancelled:
                     if gate.markResumed() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         continuation.resume(returning: false)
                     }
@@ -585,6 +594,7 @@ struct DiscoveryView: View {
 
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
                 if gate.markResumed() {
+                    connection.stateUpdateHandler = nil
                     connection.cancel()
                     continuation.resume(returning: false)
                 }
@@ -605,10 +615,9 @@ struct DiscoveryView: View {
 
         await serverManager.addServer(server, target: target)
 
-        let connected = serverManager.connections[server.id]?.isConnected == true
         connectingServer = nil
-        if connected {
-            onServerSelected?(server)
+        if serverManager.connections[server.id]?.isConnected == true {
+            navigateAfterConnect(server)
         } else {
             let phase = serverManager.connections[server.id]?.connectionPhase
             connectError = phase?.isEmpty == false ? phase : "Failed to connect"

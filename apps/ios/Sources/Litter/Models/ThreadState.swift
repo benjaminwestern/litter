@@ -29,6 +29,7 @@ final class ThreadState: ObservableObject, Identifiable {
     @Published var agentNickname: String?
     @Published var agentRole: String?
     @Published var updatedAt: Date = Date()
+    var activeTurnId: String?
 
     var hasTurnActive: Bool {
         if case .thinking = status { return true }

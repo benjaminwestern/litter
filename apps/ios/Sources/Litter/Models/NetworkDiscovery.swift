@@ -348,11 +348,13 @@ final class NetworkDiscovery: ObservableObject {
                 switch state {
                 case .ready:
                     if resumed.setTrue() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         cont.resume(returning: true)
                     }
                 case .failed, .cancelled:
                     if resumed.setTrue() {
+                        connection.stateUpdateHandler = nil
                         connection.cancel()
                         cont.resume(returning: false)
                     }
@@ -363,6 +365,7 @@ final class NetworkDiscovery: ObservableObject {
             connection.start(queue: .global(qos: .utility))
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 if resumed.setTrue() {
+                    connection.stateUpdateHandler = nil
                     connection.cancel()
                     cont.resume(returning: false)
                 }
