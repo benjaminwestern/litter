@@ -4,59 +4,87 @@ struct EmptyStateView: View {
     @EnvironmentObject var serverManager: ServerManager
     @EnvironmentObject var appState: AppState
 
-    private var connectedServerNames: [String] {
-        serverManager.connections.values
+    var body: some View {
+        if serverManager.hasAnyConnection {
+            connectedEmptyState
+        } else {
+            disconnectedEmptyState
+        }
+    }
+
+    // MARK: - Connected (no active thread)
+
+    private var connectedEmptyState: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            BrandLogo(size: 80)
+
+            VStack(spacing: 8) {
+                Text("Start a session")
+                    .font(LitterFont.monospaced(.title3, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(connectionSummary)
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.accent)
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    appState.sidebarOpen = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "plus")
+                        .font(.system(.subheadline, weight: .medium))
+                    Text("New Session")
+                        .font(LitterFont.monospaced(.subheadline))
+                }
+                .foregroundColor(.black)
+                .frame(maxWidth: 220)
+                .padding(.vertical, 12)
+                .background(LitterTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            Button {
+                appState.showServerPicker = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 13))
+                    Text("Add Server")
+                        .font(LitterFont.monospaced(.caption))
+                }
+                .foregroundColor(LitterTheme.textSecondary)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Disconnected (show discovery inline)
+
+    private var disconnectedEmptyState: some View {
+        NavigationStack {
+            DiscoveryView(onServerSelected: { _ in
+                appState.showServerPicker = false
+                appState.sidebarOpen = true
+            })
+            .environmentObject(serverManager)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var connectionSummary: String {
+        let names = serverManager.connections.values
             .filter { $0.isConnected }
             .map { $0.server.name }
             .sorted()
-    }
-
-    private var connectionSummary: String {
-        guard let first = connectedServerNames.first else { return "Not connected" }
-        let extraCount = connectedServerNames.count - 1
-        if extraCount <= 0 {
-            return "Connected: \(first)"
-        }
-        return "Connected: \(first) +\(extraCount)"
-    }
-
-    var body: some View {
-        VStack {
-            Spacer(minLength: 0)
-            VStack(spacing: 20) {
-                BrandLogo(size: 112)
-                Text("Open the sidebar to start a session")
-                    .font(LitterFont.monospaced(.body))
-                    .foregroundColor(LitterTheme.textMuted)
-                if !connectedServerNames.isEmpty {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(LitterTheme.accent)
-                            .frame(width: 8, height: 8)
-                        Text(connectionSummary)
-                            .font(LitterFont.monospaced(.footnote))
-                            .foregroundColor(LitterTheme.accent)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                }
-                if !serverManager.hasAnyConnection {
-                    Button("Connect to Server") {
-                        appState.showServerPicker = true
-                    }
-                    .font(LitterFont.monospaced(.body))
-                    .foregroundColor(LitterTheme.accent)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(LitterTheme.accent.opacity(0.4), lineWidth: 1)
-                    )
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        guard let first = names.first else { return "Not connected" }
+        if names.count == 1 { return first }
+        return "\(first) +\(names.count - 1)"
     }
 }
 

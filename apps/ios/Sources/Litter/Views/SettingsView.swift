@@ -3,7 +3,18 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var serverManager: ServerManager
     @Environment(\.dismiss) private var dismiss
-    @State private var showAccount = false
+    @State private var apiKey = ""
+    @State private var isAuthWorking = false
+    @State private var authError: String?
+    @State private var showOAuth = false
+
+    private var conn: ServerConnection? {
+        serverManager.activeConnection ?? serverManager.connections.values.first(where: { $0.isConnected })
+    }
+
+    private var authStatus: AuthStatus {
+        conn?.authStatus ?? .unknown
+    }
 
     private var connectedServers: [ServerConnection] {
         serverManager.connections.values
@@ -18,80 +29,9 @@ struct SettingsView: View {
             ZStack {
                 LitterTheme.backgroundGradient.ignoresSafeArea()
                 Form {
-                    Section {
-                        Button {
-                            showAccount = true
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Account")
-                                        .foregroundColor(.white)
-                                        .font(LitterFont.monospaced(.subheadline))
-                                    Text(accountSummary)
-                                        .font(LitterFont.monospaced(.caption))
-                                        .foregroundColor(LitterTheme.textSecondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(LitterTheme.textMuted)
-                                    .font(.caption)
-                            }
-                        }
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
-                    } header: {
-                        Text("Authentication")
-                            .foregroundColor(LitterTheme.textSecondary)
-                    }
-
-                    Section {
-                        if connectedServers.isEmpty {
-                            Text("No servers connected")
-                                .font(LitterFont.monospaced(.footnote))
-                                .foregroundColor(LitterTheme.textMuted)
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
-                        } else {
-                            ForEach(connectedServers, id: \.id) { conn in
-                                HStack {
-                                    Image(systemName: serverIconName(for: conn.server.source))
-                                        .foregroundColor(LitterTheme.accent)
-                                        .frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(conn.server.name)
-                                            .font(LitterFont.monospaced(.footnote))
-                                            .foregroundColor(.white)
-                                        Text(conn.isConnected ? "Connected" : "Disconnected")
-                                            .font(LitterFont.monospaced(.caption))
-                                            .foregroundColor(conn.isConnected ? LitterTheme.accent : LitterTheme.textSecondary)
-                                    }
-                                    Spacer()
-                                    Button("Remove") {
-                                        serverManager.removeServer(id: conn.id)
-                                    }
-                                    .font(LitterFont.monospaced(.caption))
-                                    .foregroundColor(Color(hex: "#FF5555"))
-                                }
-                                .listRowBackground(LitterTheme.surface.opacity(0.6))
-                            }
-                        }
-                    } header: {
-                        Text("Servers")
-                            .foregroundColor(LitterTheme.textSecondary)
-                    }
-
-                    Section {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Custom Font")
-                                .font(LitterFont.monospaced(.subheadline))
-                                .foregroundColor(.white)
-                            Text("Using Berkeley Mono for app typography.")
-                                .font(LitterFont.monospaced(.caption))
-                                .foregroundColor(LitterTheme.textSecondary)
-                        }
-                        .listRowBackground(LitterTheme.surface.opacity(0.6))
-                    } header: {
-                        Text("Typography")
-                            .foregroundColor(LitterTheme.textSecondary)
-                    }
+                    accountSection
+                    serversSection
+                    typographySection
                 }
                 .scrollContentBackground(.hidden)
             }
@@ -106,20 +46,222 @@ struct SettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showAccount) {
-            AccountView()
-                .environmentObject(serverManager)
+        .sheet(isPresented: $showOAuth) {
+            oauthSheet
+        }
+        .onChange(of: conn?.oauthURL) { _, url in
+            showOAuth = url != nil
+        }
+        .onChange(of: conn?.loginCompleted) { _, completed in
+            if completed == true {
+                showOAuth = false
+                conn?.loginCompleted = false
+            }
         }
     }
 
-    private var accountSummary: String {
-        let conn = serverManager.activeConnection ?? serverManager.connections.values.first(where: { $0.isConnected })
-        guard let conn else { return "Connect first" }
-        switch conn.authStatus {
+    // MARK: - Account Section (inline, no nested sheet)
+
+    private var accountSection: some View {
+        Section {
+            // Current status
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(authColor)
+                    .frame(width: 10, height: 10)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(authTitle)
+                        .font(LitterFont.monospaced(.subheadline))
+                        .foregroundColor(.white)
+                    if let sub = authSubtitle {
+                        Text(sub)
+                            .font(LitterFont.monospaced(.caption))
+                            .foregroundColor(LitterTheme.textSecondary)
+                    }
+                }
+                Spacer()
+                if authStatus != .notLoggedIn && authStatus != .unknown {
+                    Button("Logout") {
+                        Task { await conn?.logout() }
+                    }
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.danger)
+                }
+            }
+            .listRowBackground(LitterTheme.surface.opacity(0.6))
+
+            // Login actions
+            if case .notLoggedIn = authStatus {
+                Button {
+                    Task {
+                        isAuthWorking = true
+                        authError = nil
+                        await conn?.loginWithChatGPT()
+                        isAuthWorking = false
+                    }
+                } label: {
+                    HStack {
+                        if isAuthWorking {
+                            ProgressView().tint(.white).scaleEffect(0.8)
+                        }
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                        Text("Login with ChatGPT")
+                            .font(LitterFont.monospaced(.subheadline))
+                    }
+                    .foregroundColor(LitterTheme.accent)
+                }
+                .disabled(isAuthWorking)
+                .listRowBackground(LitterTheme.surface.opacity(0.6))
+
+                HStack(spacing: 8) {
+                    SecureField("sk-...", text: $apiKey)
+                        .font(LitterFont.monospaced(.footnote))
+                        .foregroundColor(.white)
+                        .textInputAutocapitalization(.never)
+                    Button("Save") {
+                        let key = apiKey.trimmingCharacters(in: .whitespaces)
+                        guard !key.isEmpty else { return }
+                        Task {
+                            isAuthWorking = true
+                            authError = nil
+                            await conn?.loginWithApiKey(key)
+                            isAuthWorking = false
+                        }
+                    }
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.accent)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty || isAuthWorking)
+                }
+                .listRowBackground(LitterTheme.surface.opacity(0.6))
+            }
+
+            if case .unknown = authStatus, conn == nil {
+                Text("Connect to a server first")
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.textMuted)
+                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+            }
+
+            if let err = authError {
+                Text(err)
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.danger)
+                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+            }
+        } header: {
+            Text("Account")
+                .foregroundColor(LitterTheme.textSecondary)
+        }
+    }
+
+    // MARK: - Servers Section
+
+    private var serversSection: some View {
+        Section {
+            if connectedServers.isEmpty {
+                Text("No servers connected")
+                    .font(LitterFont.monospaced(.footnote))
+                    .foregroundColor(LitterTheme.textMuted)
+                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+            } else {
+                ForEach(connectedServers, id: \.id) { conn in
+                    HStack {
+                        Image(systemName: serverIconName(for: conn.server.source))
+                            .foregroundColor(LitterTheme.accent)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(conn.server.name)
+                                .font(LitterFont.monospaced(.footnote))
+                                .foregroundColor(.white)
+                            Text(conn.isConnected ? "Connected" : "Disconnected")
+                                .font(LitterFont.monospaced(.caption))
+                                .foregroundColor(conn.isConnected ? LitterTheme.accent : LitterTheme.textSecondary)
+                        }
+                        Spacer()
+                        Button("Remove") {
+                            serverManager.removeServer(id: conn.id)
+                        }
+                        .font(LitterFont.monospaced(.caption))
+                        .foregroundColor(LitterTheme.danger)
+                    }
+                    .listRowBackground(LitterTheme.surface.opacity(0.6))
+                }
+            }
+        } header: {
+            Text("Servers")
+                .foregroundColor(LitterTheme.textSecondary)
+        }
+    }
+
+    // MARK: - Typography Section
+
+    private var typographySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Custom Font")
+                    .font(LitterFont.monospaced(.subheadline))
+                    .foregroundColor(.white)
+                Text("Using Berkeley Mono for app typography.")
+                    .font(LitterFont.monospaced(.caption))
+                    .foregroundColor(LitterTheme.textSecondary)
+            }
+            .listRowBackground(LitterTheme.surface.opacity(0.6))
+        } header: {
+            Text("Typography")
+                .foregroundColor(LitterTheme.textSecondary)
+        }
+    }
+
+    // MARK: - OAuth Sheet
+
+    @ViewBuilder
+    private var oauthSheet: some View {
+        if let url = conn?.oauthURL {
+            NavigationStack {
+                SafariView(url: url) {
+                    Task { await conn?.cancelLogin() }
+                }
+                .ignoresSafeArea()
+                .navigationTitle("Login with ChatGPT")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarColorScheme(.dark, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") {
+                            Task { await conn?.cancelLogin() }
+                            showOAuth = false
+                        }
+                        .foregroundColor(LitterTheme.danger)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Auth Helpers
+
+    private var authColor: Color {
+        switch authStatus {
+        case .chatgpt: return LitterTheme.accent
+        case .apiKey:  return Color(hex: "#00AAFF")
+        case .notLoggedIn, .unknown: return LitterTheme.textMuted
+        }
+    }
+
+    private var authTitle: String {
+        switch authStatus {
         case .chatgpt(let email): return email.isEmpty ? "ChatGPT" : email
         case .apiKey: return "API Key"
         case .notLoggedIn: return "Not logged in"
-        case .unknown: return conn.isConnected ? "Checking…" : "Connect first"
+        case .unknown: return "Checking…"
+        }
+    }
+
+    private var authSubtitle: String? {
+        switch authStatus {
+        case .chatgpt: return "ChatGPT account"
+        case .apiKey: return "OpenAI API key"
+        default: return nil
         }
     }
 }
