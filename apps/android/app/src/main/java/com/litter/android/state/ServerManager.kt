@@ -1809,8 +1809,8 @@ class ServerManager(
             val key = pair.substringBefore('=', "").trim()
             if (key.isBlank()) return@forEach
             val value = pair.substringAfter('=', "")
-            out[URLDecoder.decode(key, StandardCharsets.UTF_8)] =
-                URLDecoder.decode(value, StandardCharsets.UTF_8)
+            out[decodeUrlComponent(key)] =
+                decodeUrlComponent(value)
         }
         return out
     }
@@ -1976,6 +1976,9 @@ class ServerManager(
         val digest = MessageDigest.getInstance("SHA-256").digest(codeVerifier.toByteArray(StandardCharsets.UTF_8))
         return Base64.encodeToString(digest, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
+
+    private fun decodeUrlComponent(value: String): String =
+        URLDecoder.decode(value, StandardCharsets.UTF_8.toString())
 
     private fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
 
