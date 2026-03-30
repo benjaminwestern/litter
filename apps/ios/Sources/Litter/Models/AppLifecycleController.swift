@@ -185,9 +185,13 @@ final class AppLifecycleController {
 
         Task {
             await reconnectSavedServers(appModel: appModel)
-            await refreshTrackedThreads(appModel: appModel, keys: appModel.snapshot?.threads.compactMap {
+            var keysToRefresh = Set(appModel.snapshot?.threads.compactMap {
                 $0.hasActiveTurn ? $0.key : nil
             } ?? [])
+            if let activeKey = appModel.snapshot?.activeThread {
+                keysToRefresh.insert(activeKey)
+            }
+            await refreshTrackedThreads(appModel: appModel, keys: Array(keysToRefresh))
             await appModel.refreshSnapshot()
             await MainActor.run {
                 liveActivities.sync(appModel.snapshot)

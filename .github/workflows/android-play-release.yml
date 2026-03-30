@@ -267,7 +267,7 @@ jobs:
           LITTER_UPLOAD_KEY_ALIAS: ${{ secrets.LITTER_UPLOAD_KEY_ALIAS }}
           LITTER_UPLOAD_KEY_PASSWORD: ${{ secrets.LITTER_UPLOAD_KEY_PASSWORD }}
           LITTER_PLAY_SERVICE_ACCOUNT_JSON: ${{ env.LITTER_PLAY_SERVICE_ACCOUNT_JSON }}
-          LITTER_PLAY_TRACK: internal
+          LITTER_PLAY_TRACK: alpha
         run: |
           set -euo pipefail
           heartbeat() {

@@ -2,6 +2,7 @@ package com.litter.android.ui.conversation
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import com.sigkitten.litter.android.R
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import android.graphics.BitmapFactory
@@ -709,9 +710,9 @@ private fun WidgetRow(
                 .height(widgetHeight)
                 .clip(RoundedCornerShape(10.dp)),
             update = { webView ->
-                val previous = webView.getTag(android.R.id.content) as? String
+                val previous = webView.getTag(R.id.widget_webview_document) as? String
                 if (previous != document) {
-                    webView.setTag(android.R.id.content, document)
+                    webView.setTag(R.id.widget_webview_document, document)
                     webView.loadDataWithBaseURL(
                         "https://widget.local/",
                         document,
