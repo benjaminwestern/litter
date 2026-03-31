@@ -1,5 +1,6 @@
 package com.litter.android.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -129,6 +130,26 @@ fun LitterApp(appModel: AppModel) {
                 showDiscovery = true
             } else {
                 directoryPickerServerId = targetServerId
+            }
+        }
+
+        val interceptSystemBack =
+            showDiscovery ||
+                showSettings ||
+                showAccountForServer != null ||
+                directoryPickerServerId != null ||
+                navStack.size > 1
+
+        BackHandler(enabled = interceptSystemBack) {
+            when {
+                showAccountForServer != null -> showAccountForServer = null
+                directoryPickerServerId != null -> directoryPickerServerId = null
+                showSettings -> showSettings = false
+                showDiscovery -> {
+                    showDiscovery = false
+                    networkDiscovery.stopScanning()
+                }
+                navStack.size > 1 -> navStack = navStack.dropLast(1)
             }
         }
 
