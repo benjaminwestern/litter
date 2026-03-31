@@ -91,6 +91,7 @@ fun HomeDashboardScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val snapshot by appModel.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
+    val voiceController = remember { com.litter.android.state.VoiceRuntimeController.shared }
 
     var showTipJar by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AppServerSnapshot?>(null) }
@@ -310,6 +311,11 @@ fun HomeDashboardScreen(
                     scope.launch {
                         when (action) {
                             is ConfirmAction.ArchiveSession -> {
+                                voiceController.stopVoiceSessionIfActive(appModel, action.session.key)
+                                voiceController.clearPinnedLocalVoiceThreadIfMatches(appModel, action.session.key)
+                                if (appModel.snapshot.value?.activeThread == action.session.key) {
+                                    appModel.store.setActiveThread(null)
+                                }
                                 appModel.client.archiveThread(
                                     action.session.key.serverId,
                                     uniffi.codex_mobile_client.AppArchiveThreadRequest(

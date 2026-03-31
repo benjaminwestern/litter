@@ -56,11 +56,12 @@ object SessionsDerivation {
         searchQuery: String = "",
         sortMode: WorkspaceSortMode = WorkspaceSortMode.RECENT,
     ): SessionsDerivedData {
-        val totalCount = summaries.size
-        val allThreadKeys = summaries.map { it.key }
+        val uniqueSummaries = summaries.distinctBy { it.key.serverId to it.key.threadId }
+        val totalCount = uniqueSummaries.size
+        val allThreadKeys = uniqueSummaries.map { it.key }
 
         // Filter
-        var filtered = summaries.toList()
+        var filtered = uniqueSummaries.toList()
         if (serverFilter != null) {
             filtered = filtered.filter { it.key.serverId == serverFilter }
         }

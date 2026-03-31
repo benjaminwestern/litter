@@ -49,6 +49,7 @@ object HomeDashboardSupport {
         return snapshot.sessionSummaries
             .filter { it.key.serverId in connectedServerIds }
             .filter { !it.isSubagent }
+            .distinctBy { it.key.serverId to it.key.threadId }
             .sortedByDescending { it.updatedAt ?: 0L }
             .take(limit)
     }

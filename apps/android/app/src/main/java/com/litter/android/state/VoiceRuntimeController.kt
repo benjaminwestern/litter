@@ -143,6 +143,13 @@ class VoiceRuntimeController {
         }
     }
 
+    fun clearPinnedLocalVoiceThreadIfMatches(appModel: AppModel, threadKey: ThreadKey) {
+        val persistedThreadId = persistedLocalVoiceThreadId(appModel) ?: return
+        if (threadKey.serverId == LOCAL_SERVER_ID && threadKey.threadId == persistedThreadId) {
+            setPersistedLocalVoiceThreadId(appModel, null)
+        }
+    }
+
     // ── Audio capture ────────────────────────────────────────────────────────
 
     private data class RecorderConfig(
@@ -430,21 +437,34 @@ class VoiceRuntimeController {
     // ── Event handling ───────────────────────────────────────────────────────
 
     private suspend fun startRealtimeSession(appModel: AppModel, threadKey: ThreadKey) {
-        android.util.Log.i("VoiceRuntime", "Starting realtime session for ${threadKey.serverId}/${threadKey.threadId}")
+        val resolvedThreadKey = appModel.ensureThreadLoaded(threadKey) ?: threadKey
+        val hasKnownThread = appModel.snapshot.value?.threads?.any { it.key == resolvedThreadKey } == true
+        if (!hasKnownThread) {
+            android.util.Log.w(
+                "VoiceRuntime",
+                "Refusing to start realtime for missing thread ${resolvedThreadKey.serverId}/${resolvedThreadKey.threadId}",
+            )
+            return
+        }
+
+        android.util.Log.i(
+            "VoiceRuntime",
+            "Starting realtime session for ${resolvedThreadKey.serverId}/${resolvedThreadKey.threadId}",
+        )
         synchronized(sessionLock) {
             val active = _activeSession.value
-            if (active?.threadKey == threadKey && sessionJob?.isActive == true) {
-                android.util.Log.i("VoiceRuntime", "Realtime session already starting/active for ${threadKey.threadId}")
+            if (active?.threadKey == resolvedThreadKey && sessionJob?.isActive == true) {
+                android.util.Log.i("VoiceRuntime", "Realtime session already starting/active for ${resolvedThreadKey.threadId}")
                 return
             }
             if (sessionJob?.isActive == true || captureJob?.isActive == true || active != null) {
                 cleanup()
             }
-            _activeSession.value = VoiceSessionState(threadKey = threadKey)
+            _activeSession.value = VoiceSessionState(threadKey = resolvedThreadKey)
         }
 
         try {
-            cleanupKnownRealtimeVoiceSessions(appModel, keepThreadKey = threadKey)
+            cleanupKnownRealtimeVoiceSessions(appModel, keepThreadKey = resolvedThreadKey)
 
             // Subscribe BEFORE starting realtime — otherwise we miss the RealtimeStarted event
             android.util.Log.i("VoiceRuntime", "Subscribing to updates first...")
@@ -469,11 +489,11 @@ class VoiceRuntimeController {
             kotlinx.coroutines.delay(50)
 
             android.util.Log.i("VoiceRuntime", "Calling threadRealtimeStart...")
-            _activeSession.value = VoiceSessionState(threadKey = threadKey)
+            _activeSession.value = VoiceSessionState(threadKey = resolvedThreadKey)
             appModel.client.startRealtimeSession(
-                threadKey.serverId,
+                resolvedThreadKey.serverId,
                 AppStartRealtimeSessionRequest(
-                    threadId = threadKey.threadId,
+                    threadId = resolvedThreadKey.threadId,
                     prompt = realtimePrompt(appModel),
                     sessionId = "litter-voice-${UUID.randomUUID().toString().lowercase()}",
                     clientControlledHandoff = true,
@@ -481,7 +501,7 @@ class VoiceRuntimeController {
                 ),
             )
             android.util.Log.i("VoiceRuntime", "threadRealtimeStart succeeded, creating HandoffManager")
-            handoffManager = HandoffManager.create(threadKey.serverId)
+            handoffManager = HandoffManager.create(resolvedThreadKey.serverId)
         } catch (e: Exception) {
             android.util.Log.e("VoiceRuntime", "startRealtimeSession failed", e)
             _activeSession.value = _activeSession.value
@@ -498,20 +518,24 @@ class VoiceRuntimeController {
 
         persistedLocalVoiceThreadId(appModel)?.let { storedThreadId ->
             val key = ThreadKey(serverId = serverId, threadId = storedThreadId)
-            try {
-                appModel.client.resumeThread(
-                    key.serverId,
-                    launchConfig.toAppResumeThreadRequest(
-                        threadId = key.threadId,
-                        cwd = preferredVoiceThreadCwd(appModel, key, fallback = cwd),
-                    ),
-                )
+            val knownThread = appModel.snapshot.value?.let { snapshot ->
+                snapshot.threads.any { it.key == key } || snapshot.sessionSummaries.any { it.key == key }
+            } == true
+
+            if (knownThread) {
                 appModel.store.setActiveThread(key)
-                appModel.refreshSnapshot()
                 return key
-            } catch (_: Exception) {
-                setPersistedLocalVoiceThreadId(appModel, null)
             }
+
+            val loadedKey = appModel.ensureThreadLoaded(key)
+            if (loadedKey != null) {
+                appModel.store.setActiveThread(loadedKey)
+                setPersistedLocalVoiceThreadId(appModel, loadedKey.threadId)
+                appModel.refreshSnapshot()
+                return loadedKey
+            }
+
+            setPersistedLocalVoiceThreadId(appModel, null)
         }
 
         return try {

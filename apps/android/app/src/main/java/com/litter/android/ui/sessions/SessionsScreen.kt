@@ -504,6 +504,7 @@ private fun SessionNodeRow(
 ) {
     val appModel = LocalAppModel.current
     val scope = rememberCoroutineScope()
+    val voiceController = remember { com.litter.android.state.VoiceRuntimeController.shared }
     val summary = node.summary
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -656,6 +657,8 @@ private fun SessionNodeRow(
                     showArchiveDialog = false
                     scope.launch {
                         try {
+                            voiceController.stopVoiceSessionIfActive(appModel, summary.key)
+                            voiceController.clearPinnedLocalVoiceThreadIfMatches(appModel, summary.key)
                             if (appModel.snapshot.value?.activeThread == summary.key) {
                                 appModel.store.setActiveThread(null)
                             }
