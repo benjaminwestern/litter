@@ -341,6 +341,7 @@ ios-build-device: verify-ios-project
 		-scheme $(IOS_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-destination 'generic/platform=iOS' \
+		-allowProvisioningUpdates \
 		build
 
 ios-build-device-fast: verify-ios-project
@@ -349,6 +350,7 @@ ios-build-device-fast: verify-ios-project
 		-scheme $(IOS_SCHEME) \
 		-configuration $(XCODE_CONFIG) \
 		-destination 'generic/platform=iOS' \
+		-allowProvisioningUpdates \
 		build
 
 ios-build: ios-build-sim
