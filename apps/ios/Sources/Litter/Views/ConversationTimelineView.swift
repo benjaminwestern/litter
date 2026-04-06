@@ -1407,30 +1407,21 @@ private struct ConversationUserInputResponseRow: View {
     let data: ConversationUserInputResponseData
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "questionmark.bubble.fill")
-                    .litterFont(size: 12, weight: .semibold)
-                    .foregroundColor(LitterTheme.warning)
-                Text("Requested Input")
-                    .litterFont(.caption, weight: .semibold)
-                    .foregroundColor(LitterTheme.textPrimary)
-            }
-
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(data.questions.enumerated()), id: \.element.id) { _, question in
-                VStack(alignment: .leading, spacing: 4) {
-                    if let header = question.header, !header.isEmpty {
-                        Text(header.uppercased())
-                            .litterFont(.caption2, weight: .bold)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .litterFont(size: 10, weight: .semibold)
+                        .foregroundColor(LitterTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(question.header ?? question.question)
+                            .litterFont(.caption, weight: .semibold)
                             .foregroundColor(LitterTheme.textSecondary)
+                        Text(question.answer)
+                            .litterFont(.caption)
+                            .foregroundColor(LitterTheme.textPrimary)
+                            .textSelection(.enabled)
                     }
-                    Text(question.question)
-                        .litterFont(.caption, weight: .semibold)
-                        .foregroundColor(LitterTheme.textPrimary)
-                    Text(question.answer)
-                        .litterFont(.caption)
-                        .foregroundColor(LitterTheme.textSecondary)
-                        .textSelection(.enabled)
                 }
             }
         }

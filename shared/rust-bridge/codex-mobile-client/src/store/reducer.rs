@@ -1319,6 +1319,11 @@ impl AppStoreReducer {
                         if thread.info.parent_thread_id.is_some() {
                             thread.info.agent_status = Some("completed".to_string());
                         }
+                        // Clean up user input response overlays — they were
+                        // answered during this turn and no longer need to show.
+                        thread.local_overlay_items.retain(|item| {
+                            !item.id.starts_with(USER_INPUT_RESPONSE_ITEM_PREFIX)
+                        });
                         // Clean up steered follow-ups now that the turn is done.
                         thread.queued_follow_up_drafts.retain(|draft| {
                             draft.preview.kind

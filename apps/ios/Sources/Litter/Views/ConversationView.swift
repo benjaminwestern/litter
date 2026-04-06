@@ -1101,8 +1101,6 @@ private struct ConversationTurnRow: View, Equatable {
                     .padding(.top, 2)
             }
         }
-        .frame(minHeight: isLastTurn ? viewportHeight * 0.75 : 0, alignment: .top)
-        .animation(.smooth(duration: 0.3), value: isLastTurn)
     }
 
     private var collapsedCard: some View {
