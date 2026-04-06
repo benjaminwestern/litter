@@ -69,7 +69,7 @@ else
     asc versions update \
         --version-id "$VERSION_ID" \
         --release-type AFTER_APPROVAL \
-        --output json >/dev/null
+        --output json >/dev/null 2>&1 || echo "    (release type already locked, continuing)"
 fi
 
 if [[ -z "$VERSION_ID" ]]; then
