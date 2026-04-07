@@ -44,10 +44,6 @@ struct WallpaperSelectionView: View {
 
     var body: some View {
         ZStack {
-            // Full-screen preview background
-            wallpaperPreview
-                .ignoresSafeArea()
-
             // Sample bubbles overlay
             sampleBubbles
                 .padding(.top, 80)
@@ -78,6 +74,10 @@ struct WallpaperSelectionView: View {
                 .padding(.top, 8)
                 Spacer()
             }
+        }
+        .background {
+            wallpaperPreview
+                .ignoresSafeArea()
         }
         .navigationBarBackButtonHidden(true)
         .alert("Video Error", isPresented: Binding(

@@ -80,11 +80,13 @@ fi
 mkdir -p "$FASTLANE_METADATA_DIR/screenshots"
 
 echo "==> Importing repo-managed App Store metadata"
-asc migrate import \
+if ! asc migrate import \
     --app "$APP_STORE_APP_ID" \
     --version-id "$VERSION_ID" \
     --fastlane-dir "$FASTLANE_METADATA_DIR" \
-    --output json >/dev/null
+    --output json >/dev/null 2>&1; then
+    echo "    (metadata import skipped — version may already be locked)"
+fi
 
 echo "==> Attaching build $BUILD_ID to version $VERSION_ID"
 asc versions attach-build \
@@ -100,10 +102,26 @@ asc validate \
     --output json >/dev/null
 
 echo "==> Submitting build for App Store review"
-asc submit create \
-    --app "$APP_STORE_APP_ID" \
-    --version-id "$VERSION_ID" \
-    --build "$BUILD_ID" \
+SUBMISSION_ID="$(
+    asc review submissions-create \
+        --app "$APP_STORE_APP_ID" \
+        --platform IOS \
+        --output json |
+        jq -r '.data.id // empty'
+)"
+if [[ -z "$SUBMISSION_ID" ]]; then
+    echo "Failed to create review submission" >&2
+    exit 1
+fi
+
+asc review items-add \
+    --submission "$SUBMISSION_ID" \
+    --item-type appStoreVersions \
+    --item-id "$VERSION_ID" \
+    --output json >/dev/null
+
+asc review submissions-submit \
+    --id "$SUBMISSION_ID" \
     --confirm \
     --output json >"$BUILD_DIR/submission_result.json"
 

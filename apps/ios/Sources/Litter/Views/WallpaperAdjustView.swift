@@ -21,12 +21,6 @@ struct WallpaperAdjustView: View {
 
     var body: some View {
         ZStack {
-            // Full-screen live preview
-            wallpaperPreview
-                .blur(radius: isBlurred ? brightness * 20 : 0)
-                .opacity(brightness)
-                .ignoresSafeArea()
-
             // Sample bubbles
             sampleBubbles
                 .padding(.top, 80)
@@ -57,6 +51,12 @@ struct WallpaperAdjustView: View {
                 .padding(.top, 8)
                 Spacer()
             }
+        }
+        .background {
+            wallpaperPreview
+                .blur(radius: isBlurred ? brightness * 20 : 0)
+                .opacity(brightness)
+                .ignoresSafeArea()
         }
         .navigationBarBackButtonHidden(true)
         .onAppear {
