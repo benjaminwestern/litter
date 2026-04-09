@@ -487,6 +487,12 @@ private struct HomeNavigationView: View {
                         },
                         onRenameServer: { serverId, newName in
                             SavedServerStore.rename(serverId: serverId, newName: newName)
+                            appModel.reconnectController.syncSavedServers(
+                                servers: SavedServerStore.reconnectRecords(
+                                    localDisplayName: appModel.resolvedLocalServerDisplayName()
+                                )
+                            )
+                            appModel.store.renameServer(serverId: serverId, displayName: newName)
                         }
                     )
                 } else {
@@ -520,9 +526,7 @@ private struct HomeNavigationView: View {
                 case let .conversation(threadKey):
                     ConversationDestinationScreen(
                         threadKey: threadKey,
-                        topInset: topInset,
                         bottomInset: bottomInset,
-                        onBack: popCurrentRoute,
                         onResumeSessions: { showSessions(for: $0) },
                         onOpenConversation: { replaceTopConversation(with: $0) },
                         onInfo: { navigationPath.append(.conversationInfo(threadKey)) }
@@ -987,9 +991,7 @@ private struct ConversationDestinationScreen: View {
     @AppStorage("workDir") private var workDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "/"
     @State private var screenModel = ConversationScreenModel()
     let threadKey: ThreadKey
-    let topInset: CGFloat
     let bottomInset: CGFloat
-    let onBack: () -> Void
     let onResumeSessions: (String) -> Void
     let onOpenConversation: (ThreadKey) -> Void
     var onInfo: (() -> Void)?
@@ -1029,40 +1031,25 @@ private struct ConversationDestinationScreen: View {
         )
     }
 
+    private var navigationTitle: String {
+        conversationThread?.displayTitle ?? "Conversation"
+    }
+
     var body: some View {
         Group {
             if let conversationThread {
-                ZStack(alignment: .top) {
-                    ConversationView(
-                        thread: conversationThread,
-                        activeThreadKey: resolvedThreadKey,
-                        transcript: screenModel.transcript,
-                        followScrollToken: screenModel.followScrollToken,
-                        pinnedContextItems: screenModel.pinnedContextItems,
-                        composer: screenModel.composer,
-                        topInset: topInset,
-                        bottomInset: bottomInset,
-                        onOpenConversation: onOpenConversation,
-                        onResumeSessions: onResumeSessions
-                    )
-                    if appState.showModelSelector {
-                        Color.black.opacity(0.01)
-                            .ignoresSafeArea()
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                                    appState.showModelSelector = false
-                                }
-                            }
-                            .zIndex(1)
-                    }
-                    HeaderView(
-                        thread: conversationThread,
-                        onBack: onBack,
-                        onInfo: onInfo,
-                        topInset: topInset
-                    )
-                    .zIndex(2)
-                }
+                ConversationView(
+                    thread: conversationThread,
+                    activeThreadKey: resolvedThreadKey,
+                    transcript: screenModel.transcript,
+                    followScrollToken: screenModel.followScrollToken,
+                    pinnedContextItems: screenModel.pinnedContextItems,
+                    composer: screenModel.composer,
+                    topInset: 0,
+                    bottomInset: bottomInset,
+                    onOpenConversation: onOpenConversation,
+                    onResumeSessions: onResumeSessions
+                )
                 .onAppear {
                     bindScreenModel(for: conversationThread)
                 }
@@ -1093,25 +1080,33 @@ private struct ConversationDestinationScreen: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(LitterTheme.backgroundGradient.ignoresSafeArea())
-                .overlay(alignment: .topLeading) {
-                    Button(action: onBack) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .litterFont(size: 14, weight: .semibold)
-                            Text("Back")
-                                .litterFont(.callout)
-                        }
-                        .foregroundColor(LitterTheme.accent)
-                        .padding(.horizontal, 16)
-                        .padding(.top, topInset + 12)
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let conversationThread {
+                ToolbarItem(placement: .principal) {
+                    HeaderView(thread: conversationThread)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    ConversationToolbarControls(
+                        thread: conversationThread,
+                        control: .reload
+                    )
+                }
+                if onInfo != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ConversationToolbarControls(
+                            thread: conversationThread,
+                            control: .info,
+                            onInfo: onInfo
+                        )
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea(.container, edges: [.top, .bottom])
-        .toolbar(.hidden, for: .navigationBar)
+        .ignoresSafeArea(.container, edges: .bottom)
         .task(id: threadKey) {
             os_signpost(
                 .event,
