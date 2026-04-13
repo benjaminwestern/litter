@@ -341,19 +341,12 @@ fi
 
 if [[ -n "$build_id" && -n "$WHAT_TO_TEST" ]]; then
     echo "==> Ensuring What to Test notes are set for $WHAT_TO_TEST_LOCALE"
-    notes_id="$(
-        asc builds test-notes list --build-id "$build_id" --output json |
-            jq -r --arg locale "$WHAT_TO_TEST_LOCALE" \
-                '.data[] | select((.attributes.locale // .attributes.localeCode // "") == $locale) | .id' |
-            head -n 1
-    )"
-
-    if [[ -n "$notes_id" ]]; then
-        asc builds test-notes update \
-            --localization-id "$notes_id" \
+    # Try update first (works if localization already exists), fall back to create.
+    if ! asc builds test-notes update \
+            --build-id "$build_id" \
+            --locale "$WHAT_TO_TEST_LOCALE" \
             --whats-new "$WHAT_TO_TEST" \
-            --output json >/dev/null
-    else
+            --output json >/dev/null 2>&1; then
         asc builds test-notes create \
             --build-id "$build_id" \
             --locale "$WHAT_TO_TEST_LOCALE" \
