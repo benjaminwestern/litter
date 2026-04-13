@@ -10,6 +10,7 @@ mod discovery;
 mod errors;
 mod parser;
 mod reconnect;
+mod remote_path;
 pub(crate) mod shared;
 mod ssh;
 
@@ -19,6 +20,7 @@ pub use discovery::{DiscoveryBridge, DiscoveryScanSubscription, ServerBridge};
 pub use errors::ClientError;
 pub use parser::MessageParser;
 pub use reconnect::ReconnectController;
+pub use remote_path::RemotePath;
 pub use ssh::{AppSshConnectionResult, SshBridge};
 
 // Re-export reconnect boundary types so UniFFI can discover them.

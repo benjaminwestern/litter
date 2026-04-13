@@ -460,7 +460,7 @@ struct InlineModelSelectorView: View {
                     }
                 }
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 260)
 
             if let info = currentModel, !info.supportedReasoningEfforts.isEmpty {
                 Divider().background(LitterTheme.separator).padding(.horizontal, 12)

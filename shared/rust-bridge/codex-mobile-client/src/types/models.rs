@@ -346,6 +346,24 @@ impl From<upstream::CommandExecResponse> for CommandExecResult {
     }
 }
 
+/// A segment of a directory path for breadcrumb display.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DirectoryPathSegment {
+    /// Display label (e.g. "Users" or "C:\").
+    pub label: String,
+    /// Full path up to and including this segment.
+    pub full_path: String,
+}
+
+/// Result of listing a remote directory.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DirectoryListResult {
+    /// Subdirectory names, sorted case-insensitively.
+    pub directories: Vec<String>,
+    /// The resolved path that was listed.
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[derive(uniffi::Enum)]

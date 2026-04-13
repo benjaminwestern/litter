@@ -10,7 +10,7 @@ struct DirectoryPickerServerOption: Identifiable, Hashable {
     let sourceLabel: String
 }
 
-private struct DirectoryPathSegment: Identifiable {
+private struct DirectoryPathBreadcrumb: Identifiable {
     let id: String
     let label: String
     let path: String
@@ -91,7 +91,7 @@ private final class DirectoryPickerSheetModel {
     }
 
     var canNavigateUp: Bool {
-        currentPath != "/" && !currentPath.isEmpty
+        !currentPath.isEmpty && !RemotePath.parse(path: currentPath).isRoot()
     }
 
     func visibleEntries() -> [String] {
@@ -107,8 +107,10 @@ private final class DirectoryPickerSheetModel {
         return DirectoryPickerStrings.noMatches(trimmedSearchQuery)
     }
 
-    func pathSegments() -> [DirectoryPathSegment] {
-        segments(for: currentPath)
+    func pathSegments() -> [DirectoryPathBreadcrumb] {
+        RemotePath.parse(path: currentPath).segments().map {
+            DirectoryPathBreadcrumb(id: $0.fullPath, label: $0.label, path: $0.fullPath)
+        }
     }
 
     func relativeDate(for date: Date) -> String {
@@ -239,37 +241,11 @@ private final class DirectoryPickerSheetModel {
 
     private func listRemoteDirectory(_ path: String, serverId: String, appModel: AppModel) async {
         do {
-            let resp = try await appModel.client.execCommand(
-                serverId: serverId,
-                params: AppExecCommandRequest(
-                    command: ["/bin/ls", "-1ap", path],
-                    processId: nil,
-                    tty: false,
-                    streamStdin: false,
-                    streamStdoutStderr: false,
-                    outputBytesCap: nil,
-                    disableOutputCap: false,
-                    disableTimeout: false,
-                    timeoutMs: nil,
-                    cwd: path,
-                    sandboxPolicy: nil
-                )
-            )
+            let result = try await appModel.client.listRemoteDirectory(serverId: serverId, path: path)
             guard serverId == lastLoadedServerId else { return }
-
-            if resp.exitCode != 0 {
-                errorMessage = resp.stderr.isEmpty ? "ls failed with code \(resp.exitCode)" : resp.stderr
-                return
-            }
-
-            let lines = resp.stdout.split(separator: "\n").map(String.init)
-            let directories = lines.filter { $0.hasSuffix("/") && $0 != "./" && $0 != "../" }
-            allEntries =
-                directories
-                .map { String($0.dropLast()) }
-                .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            allEntries = result.directories
             withAnimation(.easeInOut(duration: 0.2)) {
-                currentPath = path
+                currentPath = result.path
             }
         } catch {
             guard serverId == lastLoadedServerId else { return }
@@ -285,12 +261,7 @@ private final class DirectoryPickerSheetModel {
         appModel: AppModel,
         isLocalServer: Bool
     ) async {
-        var nextPath = currentPath
-        if nextPath.hasSuffix("/") {
-            nextPath += name
-        } else {
-            nextPath += "/\(name)"
-        }
+        let nextPath = RemotePath.parse(path: currentPath).join(name: name).asString()
         await listDirectory(for: selectedServerId, path: nextPath, appModel: appModel, isLocalServer: isLocalServer)
     }
 
@@ -299,10 +270,7 @@ private final class DirectoryPickerSheetModel {
         appModel: AppModel,
         isLocalServer: Bool
     ) async {
-        var nextPath = (currentPath as NSString).deletingLastPathComponent
-        if nextPath.isEmpty {
-            nextPath = "/"
-        }
+        let nextPath = RemotePath.parse(path: currentPath).parent().asString()
         await listDirectory(for: selectedServerId, path: nextPath, appModel: appModel, isLocalServer: isLocalServer)
     }
 
@@ -343,50 +311,15 @@ private final class DirectoryPickerSheetModel {
             return NSHomeDirectory()
         }
         do {
-            let response = try await appModel.client.execCommand(
-                serverId: serverId,
-                params: AppExecCommandRequest(
-                    command: ["/bin/sh", "-lc", "printf %s \"$HOME\""],
-                    processId: nil,
-                    tty: false,
-                    streamStdin: false,
-                    streamStdoutStderr: false,
-                    outputBytesCap: nil,
-                    disableOutputCap: false,
-                    disableTimeout: false,
-                    timeoutMs: nil,
-                    cwd: "/tmp",
-                    sandboxPolicy: nil
-                )
-            )
-            if response.exitCode == 0 {
-                let home = response.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !home.isEmpty {
-                    return home
-                }
-            }
+            return try await appModel.client.resolveRemoteHome(serverId: serverId)
         } catch {
             if isDisconnectedClientError(error) {
                 errorMessage = DirectoryPickerStrings.serverNotConnected
             }
+            return "/"
         }
-        return "/"
     }
 
-    private func segments(for path: String) -> [DirectoryPathSegment] {
-        let normalized = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.isEmpty || normalized == "/" {
-            return [DirectoryPathSegment(id: "/", label: "/", path: "/")]
-        }
-
-        var output: [DirectoryPathSegment] = [DirectoryPathSegment(id: "/", label: "/", path: "/")]
-        var runningPath = ""
-        for component in normalized.split(separator: "/").map(String.init).filter({ !$0.isEmpty }) {
-            runningPath = runningPath.isEmpty ? "/\(component)" : "\(runningPath)/\(component)"
-            output.append(DirectoryPathSegment(id: runningPath, label: component, path: runningPath))
-        }
-        return output
-    }
 }
 
 struct DirectoryPickerView: View {

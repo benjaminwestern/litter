@@ -516,4 +516,125 @@ impl AppClient {
                 .map_err(|error| ClientError::Rpc(error.to_string()))
         })
     }
+
+    // ── Directory browsing ──────────────────────────────────────────────
+
+    /// Resolve the home directory on a remote server.
+    ///
+    /// Tries POSIX `$HOME` first, falls back to Windows `%USERPROFILE%`.
+    /// Returns `"/"` if both fail.
+    pub async fn resolve_remote_home(
+        &self,
+        server_id: String,
+    ) -> Result<String, ClientError> {
+        blocking_async!(self.rt, self.inner, |c| {
+            // Try POSIX
+            if let Ok(resp) = exec_command_simple(
+                c.as_ref(),
+                &server_id,
+                &["/bin/sh", "-lc", r#"printf %s "$HOME""#],
+                Some("/tmp"),
+            )
+            .await
+            {
+                if resp.exit_code == 0 {
+                    let home = resp.stdout.trim().to_string();
+                    if !home.is_empty() {
+                        return Ok(home);
+                    }
+                }
+            }
+            // Fallback: Windows
+            if let Ok(resp) = exec_command_simple(
+                c.as_ref(),
+                &server_id,
+                &["cmd.exe", "/c", "echo", "%USERPROFILE%"],
+                None,
+            )
+            .await
+            {
+                if resp.exit_code == 0 {
+                    let home = resp.stdout.trim().to_string();
+                    if !home.is_empty() && home != "%USERPROFILE%" {
+                        return Ok(home);
+                    }
+                }
+            }
+            Ok("/".to_string())
+        })
+    }
+
+    /// List subdirectories in a remote directory.
+    ///
+    /// Auto-detects Windows vs POSIX from the path format and runs the
+    /// appropriate command. Returns sorted directory names.
+    pub async fn list_remote_directory(
+        &self,
+        server_id: String,
+        path: String,
+    ) -> Result<types::DirectoryListResult, ClientError> {
+        blocking_async!(self.rt, self.inner, |c| {
+            let normalized = {
+                let p = path.trim();
+                if p.is_empty() { "/".to_string() } else { p.to_string() }
+            };
+            let rp = crate::remote_path::RemotePath::parse(&normalized);
+            let is_windows = rp.is_windows();
+
+            let (command, cwd): (Vec<&str>, &str) = if is_windows {
+                // `dir /b /ad` in cwd — avoids path quoting issues
+                (vec!["cmd.exe", "/c", "dir", "/b", "/ad"], &normalized)
+            } else {
+                (vec!["/bin/ls", "-1ap", &normalized], &normalized)
+            };
+
+            let resp = exec_command_simple(c.as_ref(), &server_id, &command, Some(cwd)).await?;
+
+            if resp.exit_code != 0 {
+                let msg = resp.stderr.trim();
+                return Err(ClientError::Rpc(if msg.is_empty() {
+                    format!("listing failed with exit code {}", resp.exit_code)
+                } else {
+                    msg.to_string()
+                }));
+            }
+
+            let directories =
+                crate::remote_path::parse_directory_listing(&resp.stdout, is_windows);
+            Ok(types::DirectoryListResult {
+                directories,
+                path: normalized,
+            })
+        })
+    }
+}
+
+/// Execute a simple one-shot command on a remote server.
+async fn exec_command_simple(
+    client: &MobileClient,
+    server_id: &str,
+    command: &[&str],
+    cwd: Option<&str>,
+) -> Result<upstream::CommandExecResponse, ClientError> {
+    let params = upstream::CommandExecParams {
+        command: command.iter().map(|s| s.to_string()).collect(),
+        process_id: None,
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        disable_output_cap: false,
+        disable_timeout: false,
+        timeout_ms: None,
+        cwd: cwd.map(std::path::PathBuf::from),
+        env: None,
+        size: None,
+        sandbox_policy: None,
+    };
+    rpc(
+        client,
+        server_id,
+        req!(server_id, OneOffCommandExec, params),
+    )
+    .await
 }
