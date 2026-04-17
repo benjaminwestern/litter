@@ -16,10 +16,11 @@ use crate::types::{AppMessagePhase, AppOperationStatus, AppSubagentStatus};
 use codex_app_server_protocol::{
     CollabAgentStatus, CollabAgentTool, CollabAgentToolCallStatus, CommandAction,
     CommandExecutionStatus, DynamicToolCallOutputContentItem, DynamicToolCallStatus,
-    FileUpdateChange, McpToolCallStatus, PatchApplyStatus, PatchChangeKind, ThreadItem, Turn,
-    UserInput,
+    FileUpdateChange, McpToolCallResult, McpToolCallStatus, PatchApplyStatus, PatchChangeKind,
+    ThreadItem, Turn, UserInput,
 };
 use codex_shell_command::parse_command::extract_shell_command;
+use base64::Engine;
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -280,6 +281,11 @@ fn convert_thread_item(
                 .as_ref()
                 .and_then(|r| r.structured_content.as_ref())
                 .and_then(pretty_json);
+            let computer_use = if server == "computer-use" {
+                Some(build_computer_use_view(tool, arguments, result.as_ref()))
+            } else {
+                None
+            };
             (
                 HydratedConversationItemContent::McpToolCall(HydratedMcpToolCallData {
                     server: server.clone(),
@@ -292,6 +298,7 @@ fn convert_thread_item(
                     raw_output_json,
                     error_message: error.as_ref().map(|e| e.message.clone()),
                     progress_messages: Vec::new(),
+                    computer_use,
                 }),
                 false,
             )
@@ -397,17 +404,21 @@ fn convert_thread_item(
             status,
             revised_prompt,
             result,
+            saved_path,
             ..
         } => {
-            let body = if let Some(prompt) = revised_prompt {
-                format!("Status: {status}\nPrompt: {prompt}\nResult: {result}")
-            } else {
-                format!("Status: {status}\nResult: {result}")
-            };
+            let image_png = decode_image_generation_result(result);
+            let normalized_status = convert_image_generation_status(
+                status,
+                image_png.is_some(),
+                saved_path.as_deref(),
+            );
             (
-                HydratedConversationItemContent::Note(HydratedNoteData {
-                    title: "Image Generation".to_string(),
-                    body,
+                HydratedConversationItemContent::ImageGeneration(HydratedImageGenerationData {
+                    status: normalized_status,
+                    revised_prompt: revised_prompt.clone(),
+                    image_png,
+                    saved_path: saved_path.clone(),
                 }),
                 false,
             )
@@ -538,6 +549,52 @@ fn convert_dynamic_status(status: &DynamicToolCallStatus) -> AppOperationStatus 
         DynamicToolCallStatus::Completed => AppOperationStatus::Completed,
         DynamicToolCallStatus::Failed => AppOperationStatus::Failed,
     }
+}
+
+/// Normalize the free-form image-generation status string (set by the upstream
+/// Responses API) into our typed operation status.
+///
+/// The upstream `status` on the end event is unreliable — Codex Desktop has
+/// been observed to persist `"generating"` even after the final image has
+/// been saved to disk. The presence of decoded image bytes or a non-empty
+/// `saved_path` is a stronger completion signal, so we treat those as the
+/// authoritative "done" indicator and only fall back to the status string
+/// for distinguishing failure from still-in-flight items.
+fn convert_image_generation_status(
+    status: &str,
+    has_image_bytes: bool,
+    saved_path: Option<&str>,
+) -> AppOperationStatus {
+    let normalized = status.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "failed" | "error" | "errored" | "cancelled" | "canceled" => {
+            return AppOperationStatus::Failed;
+        }
+        "completed" | "complete" | "success" | "succeeded" | "done" => {
+            return AppOperationStatus::Completed;
+        }
+        _ => {}
+    }
+    if has_image_bytes || saved_path.is_some_and(|p| !p.trim().is_empty()) {
+        AppOperationStatus::Completed
+    } else {
+        AppOperationStatus::InProgress
+    }
+}
+
+/// Decode the upstream base64 `result` blob into raw image bytes. Returns
+/// `None` for empty / invalid payloads so platforms can render a placeholder
+/// instead of attempting to display garbage.
+fn decode_image_generation_result(result: &str) -> Option<Vec<u8>> {
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let engine = base64::engine::general_purpose::STANDARD;
+    engine
+        .decode(trimmed)
+        .ok()
+        .filter(|bytes| !bytes.is_empty())
 }
 
 fn convert_collab_tool(tool: &CollabAgentTool) -> String {
@@ -743,6 +800,206 @@ fn json_number_field(
             _ => None,
         })
     })
+}
+
+fn build_computer_use_view(
+    tool: &str,
+    arguments: &serde_json::Value,
+    result: Option<&McpToolCallResult>,
+) -> ComputerUseView {
+    let arg_str = |key: &str| -> Option<String> {
+        arguments
+            .get(key)
+            .and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+    };
+    let arg_num = |key: &str| -> Option<f64> {
+        arguments.get(key).and_then(|v| match v {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::String(s) => s.parse().ok(),
+            _ => None,
+        })
+    };
+
+    let typed = match tool {
+        "list_apps" => ComputerUseTool::ListApps,
+        "get_app_state" => ComputerUseTool::GetAppState {
+            app: arg_str("app").unwrap_or_default(),
+        },
+        "click" => ComputerUseTool::Click {
+            app: arg_str("app").unwrap_or_default(),
+            element_index: arg_str("element_index"),
+            x: arg_num("x"),
+            y: arg_num("y"),
+            button: arg_str("button"),
+        },
+        "perform_secondary_action" => ComputerUseTool::PerformSecondaryAction {
+            app: arg_str("app").unwrap_or_default(),
+            element_index: arg_str("element_index"),
+            action: arg_str("action"),
+        },
+        "scroll" => ComputerUseTool::Scroll {
+            app: arg_str("app").unwrap_or_default(),
+            element_index: arg_str("element_index"),
+            direction: arg_str("direction"),
+            pages: arg_num("pages"),
+        },
+        "drag" => ComputerUseTool::Drag {
+            app: arg_str("app").unwrap_or_default(),
+            from_x: arg_num("from_x"),
+            from_y: arg_num("from_y"),
+            to_x: arg_num("to_x"),
+            to_y: arg_num("to_y"),
+        },
+        "type_text" => ComputerUseTool::TypeText {
+            app: arg_str("app").unwrap_or_default(),
+            text: arg_str("text").unwrap_or_default(),
+        },
+        "press_key" => ComputerUseTool::PressKey {
+            app: arg_str("app").unwrap_or_default(),
+            key: arg_str("key").unwrap_or_default(),
+        },
+        "set_value" => ComputerUseTool::SetValue {
+            app: arg_str("app").unwrap_or_default(),
+            element_index: arg_str("element_index"),
+            value: arg_str("value"),
+        },
+        other => ComputerUseTool::Unknown {
+            name: other.to_string(),
+        },
+    };
+
+    let summary = computer_use_summary(&typed);
+
+    let mut screenshot_png: Option<Vec<u8>> = None;
+    let mut accessibility_text: Option<String> = None;
+    if let Some(r) = result {
+        let engine = base64::engine::general_purpose::STANDARD;
+        for part in &r.content {
+            let Some(obj) = part.as_object() else { continue };
+            match obj.get("type").and_then(|v| v.as_str()) {
+                Some("image") => {
+                    let mime = obj
+                        .get("mimeType")
+                        .or_else(|| obj.get("mime_type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !mime.starts_with("image/") && !mime.is_empty() {
+                        continue;
+                    }
+                    if screenshot_png.is_some() {
+                        continue;
+                    }
+                    if let Some(data) = obj.get("data").and_then(|v| v.as_str()) {
+                        if let Ok(bytes) = engine.decode(data) {
+                            if !bytes.is_empty() {
+                                screenshot_png = Some(bytes);
+                            }
+                        }
+                    }
+                }
+                Some("text") => {
+                    if accessibility_text.is_some() {
+                        continue;
+                    }
+                    if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            accessibility_text = Some(trimmed.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    ComputerUseView {
+        tool: typed,
+        summary,
+        screenshot_png,
+        accessibility_text,
+    }
+}
+
+fn computer_use_summary(tool: &ComputerUseTool) -> String {
+    let short_app = |app: &str| -> String {
+        app.rsplit('.').next().unwrap_or(app).to_string()
+    };
+    match tool {
+        ComputerUseTool::ListApps => "List running apps".to_string(),
+        ComputerUseTool::GetAppState { app } => format!("Inspect {}", short_app(app)),
+        ComputerUseTool::Click { app, element_index, x, y, .. } => {
+            let target = match (element_index.as_deref(), x, y) {
+                (Some(idx), _, _) if !idx.is_empty() => format!("element {}", idx),
+                (_, Some(x), Some(y)) => format!("({:.0}, {:.0})", x, y),
+                _ => "—".to_string(),
+            };
+            format!("Click {} in {}", target, short_app(app))
+        }
+        ComputerUseTool::PerformSecondaryAction { app, element_index, action } => {
+            let target = element_index.as_deref().unwrap_or("—");
+            match action.as_deref() {
+                Some(act) if !act.is_empty() => {
+                    format!("{} on element {} in {}", act, target, short_app(app))
+                }
+                _ => format!("Secondary action on element {} in {}", target, short_app(app)),
+            }
+        }
+        ComputerUseTool::Scroll { app, direction, element_index, pages } => {
+            let dir = direction.as_deref().unwrap_or("scroll");
+            let pages_suffix = pages
+                .filter(|p| (*p - 1.0).abs() > f64::EPSILON)
+                .map(|p| format!(" ×{}", p as i64))
+                .unwrap_or_default();
+            match element_index {
+                Some(idx) if !idx.is_empty() => {
+                    format!("Scroll {} on element {}{} in {}", dir, idx, pages_suffix, short_app(app))
+                }
+                _ => format!("Scroll {}{} in {}", dir, pages_suffix, short_app(app)),
+            }
+        }
+        ComputerUseTool::Drag { app, from_x, from_y, to_x, to_y } => {
+            match (from_x, from_y, to_x, to_y) {
+                (Some(fx), Some(fy), Some(tx), Some(ty)) => format!(
+                    "Drag ({:.0}, {:.0}) → ({:.0}, {:.0}) in {}",
+                    fx, fy, tx, ty, short_app(app)
+                ),
+                _ => format!("Drag in {}", short_app(app)),
+            }
+        }
+        ComputerUseTool::TypeText { app, text } => {
+            let snippet = if text.chars().count() > 48 {
+                let head: String = text.chars().take(48).collect();
+                format!("{head}…")
+            } else {
+                text.clone()
+            };
+            format!("Type \"{}\" in {}", snippet, short_app(app))
+        }
+        ComputerUseTool::PressKey { app, key } => {
+            format!("Press {} in {}", key, short_app(app))
+        }
+        ComputerUseTool::SetValue { app, element_index, value } => {
+            let target = element_index.as_deref().unwrap_or("—");
+            let v_snippet = value.as_deref().map(|v| {
+                if v.chars().count() > 32 {
+                    format!("{}…", v.chars().take(32).collect::<String>())
+                } else {
+                    v.to_string()
+                }
+            });
+            match v_snippet {
+                Some(v) => format!("Set element {} = \"{}\" in {}", target, v, short_app(app)),
+                None => format!("Set element {} in {}", target, short_app(app)),
+            }
+        }
+        ComputerUseTool::Unknown { name } => format!("computer-use: {}", name),
+    }
 }
 
 fn pretty_json(value: &impl Serialize) -> Option<String> {
@@ -1187,5 +1444,138 @@ diff --git a/parser.rs b/parser.rs\n\
             items[4].content,
             HydratedConversationItemContent::ImageView(_)
         ));
+    }
+
+    #[test]
+    fn test_computer_use_mcp_hydrates_typed_view() {
+        let turns = vec![make_turn(
+            "t-computer-use",
+            vec![
+                ThreadItem::McpToolCall {
+                    id: "cu-1".into(),
+                    server: "computer-use".into(),
+                    tool: "click".into(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: serde_json::json!({
+                        "app": "com.google.Chrome",
+                        "element_index": "634"
+                    }),
+                    result: Some(codex_app_server_protocol::McpToolCallResult {
+                        content: vec![
+                            serde_json::json!({
+                                "type": "image",
+                                "mimeType": "image/png",
+                                "data": "iVBORw0KGgoAAAANSUhEUg=="
+                            }),
+                            serde_json::json!({
+                                "type": "text",
+                                "text": "App=com.google.Chrome (pid 37357)\n..."
+                            }),
+                        ],
+                        structured_content: None,
+                    }),
+                    error: None,
+                    duration_ms: Some(1700),
+                },
+                // Non-computer-use MCP should not populate the typed view.
+                ThreadItem::McpToolCall {
+                    id: "other-1".into(),
+                    server: "filesystem".into(),
+                    tool: "read_file".into(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: serde_json::json!({ "path": "/tmp/file.txt" }),
+                    result: None,
+                    error: None,
+                    duration_ms: None,
+                },
+            ],
+        )];
+
+        let items = hydrate_turns(&turns, &HydrationOptions::default());
+        assert_eq!(items.len(), 2);
+
+        let HydratedConversationItemContent::McpToolCall(data) = &items[0].content else {
+            panic!("expected McpToolCall");
+        };
+        let view = data.computer_use.as_ref().expect("computer_use view");
+        let ComputerUseTool::Click { app, element_index, .. } = &view.tool else {
+            panic!("expected Click, got {:?}", view.tool);
+        };
+        assert_eq!(app, "com.google.Chrome");
+        assert_eq!(element_index.as_deref(), Some("634"));
+        let png = view.screenshot_png.as_ref().expect("png bytes");
+        // PNG magic header: 89 50 4E 47 0D 0A 1A 0A
+        assert_eq!(&png[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        assert!(view.accessibility_text.as_deref().unwrap().starts_with("App=com.google.Chrome"));
+        assert!(view.summary.contains("634"));
+        assert!(view.summary.contains("Chrome"));
+
+        let HydratedConversationItemContent::McpToolCall(other) = &items[1].content else {
+            panic!("expected McpToolCall");
+        };
+        assert!(other.computer_use.is_none());
+    }
+
+    #[test]
+    fn test_image_generation_hydrates_typed_variant() {
+        // A 1x1 transparent PNG (89 50 4E 47 ...) as base64, used here to
+        // exercise the decode path end-to-end.
+        let png_base64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let turns = vec![make_turn(
+            "t-imagegen",
+            vec![
+                ThreadItem::ImageGeneration {
+                    id: "ig-1".into(),
+                    status: "completed".into(),
+                    revised_prompt: Some("a grumpy pirate kitty".into()),
+                    result: png_base64.into(),
+                    saved_path: Some("/tmp/ig-1.png".into()),
+                },
+                // A still-streaming item should stay InProgress with no bytes.
+                ThreadItem::ImageGeneration {
+                    id: "ig-2".into(),
+                    status: String::new(),
+                    revised_prompt: None,
+                    result: String::new(),
+                    saved_path: None,
+                },
+                // Codex Desktop has been observed to emit status="generating"
+                // even on the final end event. Presence of bytes or a saved
+                // path should mark the item as Completed regardless.
+                ThreadItem::ImageGeneration {
+                    id: "ig-3".into(),
+                    status: "generating".into(),
+                    revised_prompt: None,
+                    result: png_base64.into(),
+                    saved_path: Some("/tmp/ig-3.png".into()),
+                },
+            ],
+        )];
+
+        let items = hydrate_turns(&turns, &HydrationOptions::default());
+        assert_eq!(items.len(), 3);
+
+        let HydratedConversationItemContent::ImageGeneration(done) = &items[0].content else {
+            panic!("expected ImageGeneration");
+        };
+        assert_eq!(done.status, AppOperationStatus::Completed);
+        assert_eq!(done.revised_prompt.as_deref(), Some("a grumpy pirate kitty"));
+        assert_eq!(done.saved_path.as_deref(), Some("/tmp/ig-1.png"));
+        let png = done.image_png.as_ref().expect("decoded png bytes");
+        assert_eq!(&png[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        let HydratedConversationItemContent::ImageGeneration(pending) = &items[1].content else {
+            panic!("expected ImageGeneration");
+        };
+        assert_eq!(pending.status, AppOperationStatus::InProgress);
+        assert!(pending.image_png.is_none());
+        assert!(pending.saved_path.is_none());
+
+        let HydratedConversationItemContent::ImageGeneration(lying) = &items[2].content else {
+            panic!("expected ImageGeneration");
+        };
+        assert_eq!(lying.status, AppOperationStatus::Completed);
+        assert!(lying.image_png.is_some());
     }
 }

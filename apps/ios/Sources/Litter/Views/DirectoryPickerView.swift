@@ -35,6 +35,11 @@ private enum DirectoryPickerStrings {
     static let clear = String(localized: "directory_picker_clear")
     static let noServerSelected = String(localized: "directory_picker_no_server_selected")
     static let serverNotConnected = String(localized: "directory_picker_server_not_connected")
+    static let newFolder = String(localized: "directory_picker_new_folder")
+    static let newFolderTitle = String(localized: "directory_picker_new_folder_title")
+    static let newFolderPlaceholder = String(localized: "directory_picker_new_folder_placeholder")
+    static let create = String(localized: "directory_picker_create")
+    static let createFolderFailed = String(localized: "directory_picker_create_folder_failed")
 
     static func connectedServer(_ label: String) -> String {
         String.localizedStringWithFormat(String(localized: "directory_picker_connected_server"), label)
@@ -283,6 +288,47 @@ private final class DirectoryPickerSheetModel {
         await listDirectory(for: selectedServerId, path: path, appModel: appModel, isLocalServer: isLocalServer)
     }
 
+    /// Create a new subdirectory under `currentPath` and navigate into it.
+    /// Returns an error string on failure; nil on success.
+    @discardableResult
+    func createSubdirectory(
+        name: String,
+        selectedServerId: String,
+        appModel: AppModel,
+        isLocalServer: Bool
+    ) async -> String? {
+        let trimmed = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        guard !trimmed.isEmpty else { return nil }
+        guard !currentPath.isEmpty else {
+            return DirectoryPickerStrings.createFolderFailed
+        }
+        let target = RemotePath.parse(path: currentPath).join(name: trimmed).asString()
+        do {
+            if isLocalServer {
+                try FileManager.default.createDirectory(
+                    atPath: target,
+                    withIntermediateDirectories: true
+                )
+            } else {
+                try await appModel.client.createRemoteDirectory(
+                    serverId: selectedServerId,
+                    path: target
+                )
+            }
+        } catch {
+            return error.localizedDescription
+        }
+        await listDirectory(
+            for: selectedServerId,
+            path: target,
+            appModel: appModel,
+            isLocalServer: isLocalServer
+        )
+        return nil
+    }
+
     func removeRecentEntry(_ entry: RecentDirectoryEntry, selectedServerId: String) {
         withAnimation(.easeInOut(duration: 0.2)) {
             recentEntries = RecentDirectoryStore.shared.remove(path: entry.path, for: selectedServerId, limit: 3)
@@ -332,6 +378,9 @@ struct DirectoryPickerView: View {
     @Environment(AppModel.self) private var appModel
     @State private var model = DirectoryPickerSheetModel()
     @State private var showClearRecentsConfirmation = false
+    @State private var showNewFolderAlert = false
+    @State private var newFolderName = ""
+    @State private var newFolderError: String?
 
     private var selectedServerOption: DirectoryPickerServerOption? {
         servers.first { $0.id == selectedServerId }
@@ -406,6 +455,38 @@ struct DirectoryPickerView: View {
             Button(DirectoryPickerStrings.cancel, role: .cancel) {}
         } message: {
             Text(DirectoryPickerStrings.clearRecentMessage)
+        }
+        .alert(DirectoryPickerStrings.newFolderTitle, isPresented: $showNewFolderAlert) {
+            TextField(DirectoryPickerStrings.newFolderPlaceholder, text: $newFolderName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            Button(DirectoryPickerStrings.cancel, role: .cancel) { newFolderName = "" }
+            Button(DirectoryPickerStrings.create) {
+                let name = newFolderName
+                newFolderName = ""
+                Task {
+                    if let err = await model.createSubdirectory(
+                        name: name,
+                        selectedServerId: selectedServerId,
+                        appModel: appModel,
+                        isLocalServer: selectedServerIsLocal
+                    ) {
+                        newFolderError = err
+                    } else {
+                        emitSuccessHaptic()
+                    }
+                }
+            }
+        } message: {
+            Text(model.currentPath)
+        }
+        .alert(DirectoryPickerStrings.createFolderFailed, isPresented: Binding(
+            get: { newFolderError != nil },
+            set: { if !$0 { newFolderError = nil } }
+        )) {
+            Button("OK", role: .cancel) { newFolderError = nil }
+        } message: {
+            Text(newFolderError ?? "")
         }
     }
 
@@ -495,6 +576,15 @@ struct DirectoryPickerView: View {
                             .litterFont(.caption)
                     }
                     .disabled(!model.canNavigateUp)
+
+                    Button {
+                        newFolderName = ""
+                        showNewFolderAlert = true
+                    } label: {
+                        Label(DirectoryPickerStrings.newFolder, systemImage: "folder.badge.plus")
+                            .litterFont(.caption)
+                    }
+                    .disabled(!canSelectPath)
 
                     ForEach(model.pathSegments()) { segment in
                         Button {

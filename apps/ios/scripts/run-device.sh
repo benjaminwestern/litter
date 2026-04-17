@@ -22,6 +22,9 @@ PROFILE_PID=""
 PROFILE_ATTACH_RETRY_LIMIT="${IOS_DEVICE_PROFILE_ATTACH_RETRY_LIMIT:-15}"
 PROFILE_ATTACH_RETRY_DELAY="${IOS_DEVICE_PROFILE_ATTACH_RETRY_DELAY:-0.5}"
 IOS_DEVICE_OVERRIDE="${IOS_DEVICE_ID:-${IOS_DEVICE_UDID:-}}"
+TAILSCALE_DEVICE="${TAILSCALE_DEVICE:-}"
+TUNNEL_PID=""
+TAILSCALE_BIN="${TAILSCALE_BIN:-}"
 
 mkdir -p "${RUN_DIR}"
 
@@ -30,107 +33,292 @@ if [[ -z "${APP_PATH}" ]]; then
   exit 1
 fi
 
-DEVICE_LIST_JSON="${RUN_DIR}/devices.json"
-xcrun devicectl list devices --json-output "${DEVICE_LIST_JSON}" >/dev/null 2>&1 || true
+# ---------------------------------------------------------------------------
+# Device discovery — try local first, fall back to Tailscale tunnel
+# ---------------------------------------------------------------------------
+discover_devices() {
+  local out="$1"
+  xcrun devicectl list devices --json-output "${out}" >/dev/null 2>&1 || true
+}
 
-DEVICE_SELECTION="$(
-  python3 - "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}" <<'PY'
-import json
-import os
-import sys
+select_device() {
+  local json_path="$1"
+  local override="$2"
+  python3 - "${json_path}" "${override}" <<'PY'
+import json, os, sys
 
 path = sys.argv[1]
 override = sys.argv[2].strip()
 
 if not os.path.exists(path):
     sys.exit(0)
-
 try:
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path) as fh:
         payload = json.load(fh)
 except (OSError, json.JSONDecodeError):
     sys.exit(0)
 
 devices = payload.get("result", {}).get("devices", [])
 
-def summarize(device):
-    identifier = device.get("identifier", "")
-    hardware = device.get("hardwareProperties", {})
-    props = device.get("deviceProperties", {})
-    conn = device.get("connectionProperties", {})
-    udid = hardware.get("udid", "")
-    ecid = str(hardware.get("ecid", "") or "")
+def summarize(d):
+    identifier = d.get("identifier", "")
+    hw = d.get("hardwareProperties", {})
+    props = d.get("deviceProperties", {})
+    conn = d.get("connectionProperties", {})
+    udid = hw.get("udid", "")
+    ecid = str(hw.get("ecid", "") or "")
     name = props.get("name", "")
     tunnel_state = conn.get("tunnelState", "")
     pairing_state = conn.get("pairingState", "")
-    ddi_available = props.get("ddiServicesAvailable", False)
+    ddi = props.get("ddiServicesAvailable", False)
     xctrace_id = udid or name or identifier
-    state_rank = 0
+    rank = 0
     if tunnel_state == "connected":
-        state_rank = 3
+        rank = 3
     elif tunnel_state and tunnel_state != "unavailable":
-        state_rank = 2
-    elif ddi_available:
-        state_rank = 1
+        rank = 2
+    elif ddi:
+        rank = 1
     return {
-        "identifier": identifier,
-        "udid": udid,
-        "ecid": ecid,
-        "name": name,
-        "tunnel_state": tunnel_state,
-        "pairing_state": pairing_state,
-        "ddi_available": ddi_available,
-        "xctrace_id": xctrace_id,
-        "state_rank": state_rank,
+        "identifier": identifier, "udid": udid, "ecid": ecid,
+        "name": name, "tunnel_state": tunnel_state,
+        "pairing_state": pairing_state, "ddi_available": ddi,
+        "xctrace_id": xctrace_id, "state_rank": rank,
     }
 
-summaries = [summarize(device) for device in devices]
+sums = [summarize(d) for d in devices]
 
 selected = None
 if override:
-    for candidate in summaries:
-        if override in {
-            candidate["identifier"],
-            candidate["udid"],
-            candidate["ecid"],
-            f'ecid_{candidate["ecid"]}' if candidate["ecid"] else "",
-        }:
-            selected = candidate
+    for c in sums:
+        if override in {c["identifier"], c["udid"], c["ecid"],
+                        f'ecid_{c["ecid"]}' if c["ecid"] else ""}:
+            selected = c
             break
 
 if selected is None:
-    paired = [candidate for candidate in summaries if candidate["pairing_state"] == "paired"]
-    ranked = sorted(
-        paired,
-        key=lambda candidate: (
-            candidate["state_rank"],
-            bool(candidate["udid"]),
-            candidate["name"],
-        ),
-        reverse=True,
-    )
+    paired = [c for c in sums if c["pairing_state"] == "paired"]
+    ranked = sorted(paired, key=lambda c: (c["state_rank"], bool(c["udid"]), c["name"]), reverse=True)
     if ranked:
         selected = ranked[0]
 
 if selected is None:
     sys.exit(0)
 
-print(
-    "\t".join(
-        [
-            selected["identifier"],
-            selected["xctrace_id"],
-            selected["name"],
-            selected["tunnel_state"],
-            selected["pairing_state"],
-            "1" if selected["ddi_available"] else "0",
-            str(selected["state_rank"]),
-        ]
-    )
-)
+print("\t".join([
+    selected["identifier"], selected["xctrace_id"], selected["name"],
+    selected["tunnel_state"], selected["pairing_state"],
+    "1" if selected["ddi_available"] else "0", str(selected["state_rank"]),
+]))
 PY
-)"
+}
 
+device_is_reachable() {
+  local sel="$1"
+  [[ -n "${sel}" ]] || return 1
+  local rank
+  rank="$(echo "${sel}" | cut -f7)"
+  [[ "${rank}" -gt 0 ]]
+}
+
+resolve_tailscale_ios_peers() {
+  # Prints "hostname<TAB>ip" lines for iOS peers on the tailnet.
+  # If TAILSCALE_DEVICE is set, only return that one.
+  local filter="$1"
+  local json_output
+  json_output="$("${TAILSCALE_BIN}" status --json 2>/dev/null || true)"
+  if [[ -n "${json_output}" ]]; then
+    TAILSCALE_STATUS_JSON="${json_output}" python3 - "${filter}" <<'PY'
+import json, os, sys
+name_filter = sys.argv[1].strip().lower()
+raw = os.environ.get("TAILSCALE_STATUS_JSON", "")
+if not raw.strip():
+    sys.exit(0)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(0)
+peers = []
+for peer in (data.get("Peer") or {}).values():
+    hostname = (peer.get("HostName") or "").strip()
+    os_name = (peer.get("OS") or "").lower()
+    ips = peer.get("TailscaleIPs") or []
+    if not ips:
+        continue
+    # prefer IPv4
+    ip = next((i for i in ips if "." in i), ips[0])
+    if name_filter:
+        if hostname.lower() == name_filter:
+            print(f"{hostname}\t{ip}")
+            break
+    elif os_name == "ios":
+        peers.append((hostname, ip))
+for hostname, ip in peers:
+    print(f"{hostname}\t{ip}")
+PY
+    return 0
+  fi
+
+  TAILSCALE_STATUS_TEXT="$("${TAILSCALE_BIN}" status 2>/dev/null || true)" python3 - "${filter}" <<'PY'
+import os, sys
+
+name_filter = sys.argv[1].strip().lower()
+peers = []
+
+for raw_line in os.environ.get("TAILSCALE_STATUS_TEXT", "").splitlines():
+    line = raw_line.rstrip("\n")
+    if not line.strip():
+        continue
+    parts = line.split()
+    if len(parts) < 4:
+        continue
+    ip, hostname, _, os_name = parts[:4]
+    if "." not in ip:
+        continue
+    if os_name.lower() != "ios":
+        continue
+    if name_filter:
+        if hostname.lower() == name_filter:
+            print(f"{hostname}\t{ip}")
+            break
+    else:
+        peers.append((hostname, ip))
+
+for hostname, ip in peers:
+    print(f"{hostname}\t{ip}")
+PY
+}
+
+start_tailscale_tunnel() {
+  local log="${RUN_DIR}/tunnel.log"
+  echo "==> Starting pymobiledevice3 WiFi tunnel for ${DEVICE_NAME} (${DEVICE_UDID})..."
+  sudo -n /usr/local/bin/litter-ios-remote start-tunnel --connection-type wifi --udid "${DEVICE_UDID}" \
+    > "${log}" 2>&1 &
+  TUNNEL_PID=$!
+  # wait for the tunnel to come up (devicectl should see the device)
+  local attempt=0
+  local max_attempts=30
+  while (( attempt < max_attempts )); do
+    sleep 1
+    ((attempt++))
+    discover_devices "${DEVICE_LIST_JSON}"
+    local sel
+    sel="$(select_device "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}")" || true
+    if device_is_reachable "${sel}"; then
+      echo "==> Device reachable via Tailscale tunnel (attempt ${attempt}/${max_attempts})"
+      return 0
+    fi
+  done
+  echo "ERROR: device not reachable after ${max_attempts}s via Tailscale tunnel" >&2
+  echo "       tunnel log: ${log}" >&2
+  kill "${TUNNEL_PID}" 2>/dev/null || true
+  TUNNEL_PID=""
+  return 1
+}
+
+DEVICE_LIST_JSON="${RUN_DIR}/devices.json"
+discover_devices "${DEVICE_LIST_JSON}"
+
+DEVICE_SELECTION="$(select_device "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}")" || true
+DEVICE_UDID="$(python3 - "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+override = sys.argv[2].strip()
+
+if not os.path.exists(path):
+    sys.exit(0)
+try:
+    with open(path) as fh:
+        payload = json.load(fh)
+except (OSError, json.JSONDecodeError):
+    sys.exit(0)
+
+for device in payload.get("result", {}).get("devices", []):
+    hw = device.get("hardwareProperties", {})
+    props = device.get("deviceProperties", {})
+    udid = hw.get("udid", "") or ""
+    ecid = str(hw.get("ecid", "") or "")
+    identifier = device.get("identifier", "") or ""
+    name = props.get("name", "") or ""
+    if override and override not in {identifier, udid, ecid, f"ecid_{ecid}" if ecid else ""}:
+        continue
+    print(udid)
+    break
+PY
+)" || true
+DEVICE_NAME="$(python3 - "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+override = sys.argv[2].strip()
+
+if not os.path.exists(path):
+    sys.exit(0)
+try:
+    with open(path) as fh:
+        payload = json.load(fh)
+except (OSError, json.JSONDecodeError):
+    sys.exit(0)
+
+for device in payload.get("result", {}).get("devices", []):
+    hw = device.get("hardwareProperties", {})
+    props = device.get("deviceProperties", {})
+    udid = hw.get("udid", "") or ""
+    ecid = str(hw.get("ecid", "") or "")
+    identifier = device.get("identifier", "") or ""
+    name = props.get("name", "") or ""
+    if override and override not in {identifier, udid, ecid, f"ecid_{ecid}" if ecid else ""}:
+        continue
+    print(name)
+    break
+PY
+)" || true
+
+if [[ -z "${TAILSCALE_BIN}" ]]; then
+  if command -v tailscale >/dev/null 2>&1; then
+    TAILSCALE_BIN="$(command -v tailscale)"
+  elif [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+    TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  fi
+fi
+
+# If device not reachable, try Tailscale fallback
+if ! device_is_reachable "${DEVICE_SELECTION}"; then
+  if [[ -z "${TAILSCALE_BIN}" ]]; then
+    echo "WARN: device not found locally and tailscale is not installed — skipping remote fallback" >&2
+  elif ! command -v pymobiledevice3 >/dev/null 2>&1; then
+    echo "WARN: device not found locally but pymobiledevice3 is not installed" >&2
+    echo "      install it with: pipx install pymobiledevice3" >&2
+    echo "      or:              uv tool install pymobiledevice3" >&2
+  elif [[ -z "${DEVICE_UDID}" ]]; then
+    echo "WARN: device not found locally and its UDID could not be resolved for remote fallback" >&2
+  elif ! sudo -n true >/dev/null 2>&1; then
+    echo "WARN: device not found locally and remote tunneling requires passworded sudo in this shell" >&2
+    echo "      run again from an interactive terminal where sudo can prompt" >&2
+  fi
+  if [[ -n "${TAILSCALE_BIN}" ]] && command -v pymobiledevice3 >/dev/null 2>&1 && [[ -n "${DEVICE_UDID}" ]] && sudo -n true >/dev/null 2>&1; then
+    TS_PEERS="$(resolve_tailscale_ios_peers "${TAILSCALE_DEVICE}")" || true
+    if [[ -z "${TS_PEERS}" ]]; then
+      if [[ -n "${TAILSCALE_DEVICE}" ]]; then
+        echo "WARN: '${TAILSCALE_DEVICE}' not found on your tailnet" >&2
+      else
+        echo "WARN: no iOS peers found on your tailnet" >&2
+        echo "      set TAILSCALE_DEVICE to your phone's Tailscale hostname" >&2
+      fi
+    else
+      while IFS=$'\t' read -r ts_name ts_ip; do
+        echo "==> Device not found locally, trying Tailscale (${ts_name} @ ${ts_ip})..."
+        if start_tailscale_tunnel; then
+          DEVICE_SELECTION="$(select_device "${DEVICE_LIST_JSON}" "${IOS_DEVICE_OVERRIDE}")" || true
+          break
+        fi
+      done <<< "${TS_PEERS}"
+    fi
+  fi
+fi
+
+# Legacy inline selection removed — now uses select_device() above
 if [[ -z "${DEVICE_SELECTION}" ]]; then
   echo "ERROR: no paired iOS device found via devicectl" >&2
   exit 1
@@ -268,6 +456,12 @@ cleanup() {
   if [[ -n "${CONSOLE_PID}" ]]; then
     kill "${CONSOLE_PID}" 2>/dev/null || true
     wait "${CONSOLE_PID}" 2>/dev/null || true
+  fi
+
+  if [[ -n "${TUNNEL_PID}" ]]; then
+    echo "==> Stopping Tailscale tunnel..."
+    sudo -n kill -TERM "${TUNNEL_PID}" 2>/dev/null || true
+    wait "${TUNNEL_PID}" 2>/dev/null || true
   fi
 
   exit "${exit_code}"

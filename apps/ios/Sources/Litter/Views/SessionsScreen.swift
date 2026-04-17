@@ -756,10 +756,9 @@ struct SessionsScreen: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(thread.sessionTitle)
+                            FormattedText(text: thread.sessionTitle, lineLimit: 2)
                                 .litterFont(.footnote)
                                 .foregroundColor(LitterTheme.textPrimary)
-                                .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                                 .accessibilityIdentifier("sessions.sessionTitle")
 

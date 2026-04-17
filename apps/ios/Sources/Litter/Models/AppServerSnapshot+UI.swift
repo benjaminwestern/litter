@@ -99,4 +99,33 @@ extension AppServerSnapshot {
         }
         return transportState.accentColor
     }
+
+    /// Stable mapping to the shared dot palette (green/orange/red). Used by
+    /// the home server pills so connection state reads the same across themes.
+    var statusDotState: StatusDotState {
+        if currentConnectionStep?.state == .failed {
+            return .error
+        }
+        if currentConnectionStep?.state == .awaitingUserInput {
+            return .pending
+        }
+        if connectionProgressLabel != nil {
+            return .pending
+        }
+        if transportState == .connected, !isLocal, account == nil {
+            return .pending
+        }
+        if transportState == .connected, ipcState == .disconnected,
+           ExperimentalFeatures.shared.isEnabled(.ipc) {
+            return .pending
+        }
+        switch transportState {
+        case .connected:
+            return .ok
+        case .connecting, .unresponsive:
+            return .pending
+        case .disconnected, .unknown:
+            return .idle
+        }
+    }
 }

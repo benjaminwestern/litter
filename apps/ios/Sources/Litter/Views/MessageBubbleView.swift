@@ -121,7 +121,7 @@ struct UserBubble: View {
                     }
                 }
                 if !text.isEmpty {
-                    Text(text)
+                    FormattedText(text: text)
                         .litterFont(size: contentFontSize)
                         .foregroundColor(LitterTheme.textPrimary)
                         .textSelection(.enabled)

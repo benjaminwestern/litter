@@ -43,6 +43,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         }
         application.registerForRemoteNotifications()
         UNUserNotificationCenter.current().delegate = self
+        OrientationResponder.shared.start()
         showSplashWindow()
         scheduleKeyboardWarmup()
         return true
@@ -393,6 +394,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $bindableAppState.showSettings) {
             SettingsView()
+                .environment(appState)
                 .environment(\.textScale, textScale)
         }
     }
@@ -418,6 +420,7 @@ private struct HomeNavigationView: View {
     @State private var homeDashboardModel = HomeDashboardModel()
     @State private var navigationPath: [HomeNavigationRoute] = []
     @State private var directoryPickerSheet: SessionLaunchSupport.DirectoryPickerSheetModel?
+    @State private var showProjectPicker = false
     @State private var openingRecentSessionKey: ThreadKey?
     @State private var isStartingNewSession = false
     @State private var isStartingVoice = false
@@ -459,53 +462,9 @@ private struct HomeNavigationView: View {
         NavigationStack(path: $navigationPath) {
             Group {
                 if isHomeRouteActive {
-                    HomeDashboardView(
-                        recentSessions: homeDashboardModel.recentSessions,
-                        connectedServers: homeDashboardModel.connectedServers,
-                        openingRecentSessionKey: openingRecentSessionKey,
-                        isStartingNewSession: isStartingNewSession,
-                        onOpenRecentSession: openRecentSession,
-                        onOpenServerSessions: openServerSessions,
-                        onNewSession: handleNewSessionTap,
-                        onConnectServer: { appState.showServerPicker = true },
-                        onShowSettings: { appState.showSettings = true },
-                        onDeleteThread: { key in
-                            _ = try? await appModel.client.archiveThread(
-                                serverId: key.serverId,
-                                params: AppArchiveThreadRequest(threadId: key.threadId)
-                            )
-                            await appModel.refreshSnapshot()
-                        },
-                        onReconnectServer: { server in
-                            Task {
-                                await AppRuntimeController.shared.reconnectServer(serverId: server.id)
-                            }
-                        },
-                        onDisconnectServer: { serverId in
-                            SavedServerStore.remove(serverId: serverId)
-                            Task { await SshSessionStore.shared.close(serverId: serverId, ssh: appModel.ssh) }
-                            appModel.serverBridge.disconnectServer(serverId: serverId)
-                        },
-                        onRenameServer: { serverId, newName in
-                            SavedServerStore.rename(serverId: serverId, newName: newName)
-                            appModel.reconnectController.syncSavedServers(
-                                servers: SavedServerStore.reconnectRecords(
-                                    localDisplayName: appModel.resolvedLocalServerDisplayName()
-                                )
-                            )
-                            appModel.store.renameServer(serverId: serverId, displayName: newName)
-                        },
-                        onOpenRecording: { url in
-                            navigationPath.append(.replayRecording(url))
-                        }
-                    )
+                    homeDashboard
                 } else {
                     LitterTheme.backgroundGradient.ignoresSafeArea()
-                }
-            }
-            .overlay(alignment: .bottom) {
-                if isHomeRouteActive, experimentalFeatures.isEnabled(.realtimeVoice) {
-                    homeVoiceLauncher
                 }
             }
             .navigationDestination(for: HomeNavigationRoute.self) { route in
@@ -659,13 +618,32 @@ private struct HomeNavigationView: View {
                     },
                     onDirectorySelected: { serverId, cwd in
                         directoryPickerSheet = nil
-                        Task { await startNewSession(serverId: serverId, cwd: cwd) }
+                        createAndSelectProject(serverId: serverId, cwd: cwd)
                     },
                     onDismissRequested: {
                         directoryPickerSheet = nil
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showProjectPicker) {
+            ProjectPickerSheet(
+                projects: homeDashboardModel.projects,
+                serverNamesById: Dictionary(uniqueKeysWithValues: homeDashboardModel.connectedServers.map { ($0.id, $0.displayName) }),
+                onSelect: { project in
+                    homeDashboardModel.selectedServerId = project.serverId
+                    homeDashboardModel.selectedProject = project
+                },
+                onCreateNew: {
+                    showProjectPicker = false
+                    let defaultServerId = homeDashboardModel.selectedServerId ?? defaultNewSessionServerId()
+                    if let defaultServerId {
+                        directoryPickerSheet = SessionLaunchSupport.DirectoryPickerSheetModel(selectedServerId: defaultServerId)
+                    } else {
+                        appState.showServerPicker = true
+                    }
+                }
+            )
         }
         .alert("Home Action Failed", isPresented: Binding(
             get: { actionErrorMessage != nil },
@@ -683,6 +661,11 @@ private struct HomeNavigationView: View {
             activeThreadKey: appModel.snapshot?.activeThread,
             preferredServerId: preferredServerId
         )
+    }
+
+    private func createAndSelectProject(serverId: String, cwd: String) {
+        homeDashboardModel.selectFreshProject(serverId: serverId, cwd: cwd)
+        RecentDirectoryStore.shared.record(path: cwd, for: serverId)
     }
 
     private func handleNewSessionTap() {
@@ -951,6 +934,164 @@ private struct HomeNavigationView: View {
         guard !navigationPath.isEmpty else { return }
         appState.showModelSelector = false
         navigationPath.removeLast()
+    }
+
+    private var homeDashboard: some View {
+        HomeDashboardView(
+            recentSessions: homeDashboardModel.recentSessions,
+            allSessions: homeDashboardModel.allSessions,
+            pinnedThreadKeys: homeDashboardModel.pinnedKeys,
+            connectedServers: homeDashboardModel.connectedServers,
+            projects: homeDashboardModel.projects,
+            selectedServerId: homeDashboardModel.selectedServerId,
+            selectedProject: homeDashboardModel.selectedProject,
+            openingRecentSessionKey: openingRecentSessionKey,
+            onOpenRecentSession: openRecentSession,
+            onSelectServer: handleSelectServer,
+            onAddServer: { appState.showServerPicker = true },
+            onOpenProjectPicker: { showProjectPicker = true },
+            onThreadCreated: { key in homeDashboardModel.pinThread(key) },
+            onShowSettings: { appState.showSettings = true },
+            onPinThread: pinThread,
+            onUnpinThread: unpinThread,
+            onHideThread: hideThread,
+            onHydrateThread: hydrateThread,
+            onDeleteThread: deleteThread,
+            onReconnectServer: reconnectServer,
+            onDisconnectServer: disconnectServer,
+            onRenameServer: renameServer,
+            onOpenRecording: { url in
+                navigationPath.append(.replayRecording(url))
+            },
+            onSendReply: sendQuickReply,
+            onCancelThread: cancelThread,
+            onLoadAllThreads: loadAllThreads
+        )
+    }
+
+    private func handleSelectServer(_ server: HomeDashboardServer) {
+        if homeDashboardModel.selectedServerId == server.id {
+            homeDashboardModel.clearScope()
+        } else {
+            homeDashboardModel.selectedServerId = server.id
+        }
+    }
+
+    private func pinThread(_ key: ThreadKey) {
+        homeDashboardModel.pinThread(key)
+    }
+
+    private func unpinThread(_ key: ThreadKey) {
+        homeDashboardModel.unpinThread(key)
+    }
+
+    private func hideThread(_ key: ThreadKey) {
+        homeDashboardModel.hideThread(key)
+    }
+
+    private func hydrateThread(_ key: ThreadKey) async {
+        _ = try? await appModel.client.readThread(
+            serverId: key.serverId,
+            params: AppReadThreadRequest(threadId: key.threadId, includeTurns: true)
+        )
+        await appModel.refreshSnapshot()
+    }
+
+    private func deleteThread(_ key: ThreadKey) async {
+        _ = try? await appModel.client.archiveThread(
+            serverId: key.serverId,
+            params: AppArchiveThreadRequest(threadId: key.threadId)
+        )
+        await appModel.refreshSnapshot()
+    }
+
+    @MainActor
+    private func cancelThread(_ threadKey: ThreadKey) async {
+        // Look up the thread's active turn id — interrupt requires both.
+        guard let thread = appModel.snapshot?.threadSnapshot(for: threadKey),
+              let turnId = thread.activeTurnId?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !turnId.isEmpty else {
+            return
+        }
+        do {
+            _ = try await appModel.client.interruptTurn(
+                serverId: threadKey.serverId,
+                params: AppInterruptTurnRequest(
+                    threadId: threadKey.threadId,
+                    turnId: turnId
+                )
+            )
+            await appModel.refreshSnapshot()
+        } catch {
+            actionErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func sendQuickReply(_ threadKey: ThreadKey, text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = await appModel.hydrateThreadPermissions(for: threadKey, appState: appState)
+        let payload = AppComposerPayload(
+            text: trimmed,
+            additionalInputs: [],
+            approvalPolicy: appState.launchApprovalPolicy(for: threadKey),
+            sandboxPolicy: appState.turnSandboxPolicy(for: threadKey),
+            model: nil,
+            effort: nil,
+            serviceTier: nil
+        )
+        do {
+            try await appModel.startTurn(key: threadKey, payload: payload)
+            await appModel.refreshSnapshot()
+        } catch {
+            actionErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func reconnectServer(_ server: HomeDashboardServer) {
+        Task {
+            await AppRuntimeController.shared.reconnectServer(serverId: server.id)
+        }
+    }
+
+    private func disconnectServer(_ serverId: String) {
+        SavedServerStore.remove(serverId: serverId)
+        Task { await SshSessionStore.shared.close(serverId: serverId, ssh: appModel.ssh) }
+        appModel.serverBridge.disconnectServer(serverId: serverId)
+    }
+
+    private func renameServer(_ serverId: String, newName: String) {
+        SavedServerStore.rename(serverId: serverId, newName: newName)
+        appModel.reconnectController.syncSavedServers(
+            servers: SavedServerStore.reconnectRecords(
+                localDisplayName: appModel.resolvedLocalServerDisplayName()
+            )
+        )
+        appModel.store.renameServer(serverId: serverId, displayName: newName)
+    }
+
+    @Sendable
+    private func loadAllThreads() async {
+        await withTaskGroup(of: Void.self) { group in
+            for server in homeDashboardModel.connectedServers {
+                let serverId = server.id
+                group.addTask {
+                    _ = try? await appModel.client.listThreads(
+                        serverId: serverId,
+                        params: AppListThreadsRequest(
+                            cursor: nil,
+                            limit: nil,
+                            archived: nil,
+                            cwd: nil,
+                            searchTerm: nil
+                        )
+                    )
+                }
+            }
+        }
+        await appModel.refreshSnapshot()
     }
 
     private func updateHomeDashboardActivity() {

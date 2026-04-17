@@ -6,9 +6,20 @@ struct HomeDashboardRecentSession: Identifiable, Hashable {
     let serverId: String
     let serverDisplayName: String
     let sessionTitle: String
+    let preview: String
     let cwd: String
+    let model: String
+    let agentLabel: String?
     let updatedAt: Date
     let hasTurnActive: Bool
+    let isSubagent: Bool
+    let isFork: Bool
+    let lastResponsePreview: String?
+    let lastUserMessage: String?
+    let lastToolLabel: String?
+    let recentToolLog: [AppToolLogEntry]
+    let stats: AppConversationStats?
+    let tokenUsage: AppTokenUsage?
 
     var id: ThreadKey { key }
 }
@@ -24,6 +35,7 @@ struct HomeDashboardServer: Identifiable, Equatable {
     let sourceLabel: String
     let statusLabel: String
     let statusColor: Color
+    let statusDotState: StatusDotState
 
     var deduplicationKey: String {
         if isLocal {
@@ -54,29 +66,41 @@ struct HomeDashboardServer: Identifiable, Equatable {
 
 @MainActor
 enum HomeDashboardSupport {
+    /// Pass `limit: nil` to return every session across connected servers
+    /// (used by the thread-search view). Default is the home task list cap.
     static func recentConnectedSessions(
         from sessions: [AppSessionSummary],
         serversById: [String: HomeDashboardServer],
-        limit: Int = 10
+        limit: Int? = 10
     ) -> [HomeDashboardRecentSession] {
-        Array(
-            sessions
-                .filter { serversById[$0.key.serverId] != nil }
-                .sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
-                .compactMap { session in
-                    guard let server = serversById[session.key.serverId] else { return nil }
-                    return HomeDashboardRecentSession(
-                        key: session.key,
-                        serverId: session.key.serverId,
-                        serverDisplayName: server.displayName,
-                        sessionTitle: sessionTitle(for: session),
-                        cwd: session.cwd,
-                        updatedAt: Date(timeIntervalSince1970: TimeInterval(session.updatedAt ?? 0)),
-                        hasTurnActive: session.hasActiveTurn
-                    )
-                }
-                .prefix(limit)
-        )
+        let sorted = sessions
+            .filter { serversById[$0.key.serverId] != nil }
+            .sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+            .compactMap { session -> HomeDashboardRecentSession? in
+                guard let server = serversById[session.key.serverId] else { return nil }
+                return HomeDashboardRecentSession(
+                    key: session.key,
+                    serverId: session.key.serverId,
+                    serverDisplayName: server.displayName,
+                    sessionTitle: sessionTitle(for: session),
+                    preview: session.preview,
+                    cwd: session.cwd,
+                    model: session.model,
+                    agentLabel: session.agentDisplayLabel,
+                    updatedAt: Date(timeIntervalSince1970: TimeInterval(session.updatedAt ?? 0)),
+                    hasTurnActive: session.hasActiveTurn,
+                    isSubagent: session.isSubagent,
+                    isFork: session.isFork,
+                    lastResponsePreview: session.lastResponsePreview,
+                    lastUserMessage: session.lastUserMessage,
+                    lastToolLabel: session.lastToolLabel,
+                    recentToolLog: session.recentToolLog,
+                    stats: session.stats,
+                    tokenUsage: session.tokenUsage
+                )
+            }
+        if let limit { return Array(sorted.prefix(limit)) }
+        return sorted
     }
 
     static func sortedConnectedServers(
@@ -98,7 +122,8 @@ enum HomeDashboardSupport {
                     health: server.health,
                     sourceLabel: server.connectionModeLabel,
                     statusLabel: server.statusLabel,
-                    statusColor: server.statusColor
+                    statusColor: server.statusColor,
+                    statusDotState: server.statusDotState
                 )
             }
             .sorted { lhs, rhs in
@@ -136,6 +161,22 @@ enum HomeDashboardSupport {
     }
 
     private static func sessionTitle(for session: AppSessionSummary) -> String {
-        session.displayTitle
+        let trimmedPreview = session.preview.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPreview.isEmpty { return trimmedPreview }
+
+        // Rust's `title` falls back to the literal "Untitled session" when
+        // title + preview are both empty on the server — treat it as empty
+        // here so we pick up the first user message instead.
+        let trimmedTitle = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty && trimmedTitle != "Untitled session" {
+            return trimmedTitle
+        }
+
+        if let userMessage = session.lastUserMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !userMessage.isEmpty {
+            return userMessage
+        }
+
+        return "New thread"
     }
 }

@@ -118,6 +118,31 @@ val AppServerSnapshot.statusColor: Color
         else -> transportState.accentColor
     }
 
+/**
+ * Stable mapping to the shared `StatusDotState` palette (green/orange/red) so
+ * the server dot renders the same colors as the task indicator across themes.
+ */
+val AppServerSnapshot.statusDotState: com.litter.android.ui.common.StatusDotState
+    get() = when {
+        currentConnectionStep?.state == AppConnectionStepState.FAILED ->
+            com.litter.android.ui.common.StatusDotState.ERROR
+        currentConnectionStep?.state == AppConnectionStepState.AWAITING_USER_INPUT ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        connectionProgressLabel != null ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        transportState == AppServerTransportState.CONNECTED && !isLocal && account == null ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        transportState == AppServerTransportState.CONNECTED && ipcState == AppServerIpcState.DISCONNECTED ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        transportState == AppServerTransportState.CONNECTED ->
+            com.litter.android.ui.common.StatusDotState.OK
+        transportState == AppServerTransportState.CONNECTING ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        transportState == AppServerTransportState.UNRESPONSIVE ->
+            com.litter.android.ui.common.StatusDotState.PENDING
+        else -> com.litter.android.ui.common.StatusDotState.IDLE
+    }
+
 // --- AppThreadSnapshot extensions --------------------------------------------
 
 val ThreadSummaryStatus.isActiveStatus: Boolean

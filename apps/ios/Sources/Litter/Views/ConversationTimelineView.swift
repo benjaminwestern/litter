@@ -405,7 +405,15 @@ private struct ConversationTimelineItemRow: View, Equatable {
             case .turnDiff(let data):
                 ConversationTurnDiffRow(data: data)
             case .mcpToolCall(let data):
-                toolCallRow(makeMcpModel(data))
+                if let view = data.computerUse {
+                    ComputerUseToolCallView(
+                        data: data,
+                        view: view,
+                        externalExpanded: !isLiveTurn && shouldPreserveRichDetail
+                    )
+                } else {
+                    toolCallRow(makeMcpModel(data))
+                }
             case .dynamicToolCall(let data):
                 if CrossServerTools.isRichTool(data.tool) {
                     CrossServerToolResultView(data: data)
@@ -421,6 +429,11 @@ private struct ConversationTimelineItemRow: View, Equatable {
                 toolCallRow(makeWebSearchModel(data))
             case .imageView(let data):
                 toolCallRow(makeImageViewModel(data))
+            case .imageGeneration(let data):
+                ImageGenerationToolCallView(
+                    data: data,
+                    externalExpanded: !isLiveTurn && shouldPreserveRichDetail
+                )
             case .widget(let data):
                 WidgetContainerView(
                     widget: data.widgetState,
@@ -2220,6 +2233,8 @@ private extension ConversationItem {
             return data.isInProgress ? .inProgress : .completed
         case .imageView:
             return .completed
+        case .imageGeneration(let data):
+            return data.status.toolCallStatus
         default:
             return nil
         }

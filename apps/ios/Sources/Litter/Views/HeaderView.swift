@@ -395,7 +395,10 @@ struct InlineModelSelectorView: View {
     let models: [ModelInfo]
     @Binding var selectedModel: String
     @Binding var reasoningEffort: String
-    var threadKey: ThreadKey
+    /// `nil` indicates the view is being used before a thread exists (home
+    /// composer). In that case, plan-mode selection is stored as a pending
+    /// app-state preference that the caller applies after `startThread`.
+    var threadKey: ThreadKey?
     var collaborationMode: AppModeKind = .default
     var effectiveApprovalPolicy: AppAskForApproval?
     var effectiveSandboxPolicy: AppSandboxPolicy?
@@ -405,7 +408,19 @@ struct InlineModelSelectorView: View {
     var onDismiss: () -> Void
 
     private var currentModel: ModelInfo? {
-        models.first { $0.id == selectedModel }
+        if let match = models.first(where: { $0.id == selectedModel }) {
+            return match
+        }
+        // When shown from the home composer, `selectedModel` may be empty
+        // because the user hasn't picked yet. Fall back to the default
+        // model so the reasoning effort row has something to render.
+        return models.first(where: { $0.isDefault }) ?? models.first
+    }
+
+    /// Effective collaboration mode: live thread value when we have one,
+    /// otherwise the pre-thread pending selection tracked on `appState`.
+    private var effectiveCollaborationMode: AppModeKind {
+        threadKey == nil ? appState.pendingCollaborationMode : collaborationMode
     }
 
     private var isFullAccess: Bool {
@@ -422,7 +437,11 @@ struct InlineModelSelectorView: View {
                         Button {
                             selectedModel = model.id
                             reasoningEffort = model.defaultReasoningEffort.wireValue
-                            onDismiss()
+                            // Auto-dismiss only in the thread-scoped popover
+                            // context. In the home sheet (no thread yet) we
+                            // let the user pick a model AND change plan or
+                            // permissions before hitting Done.
+                            if threadKey != nil { onDismiss() }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -491,11 +510,16 @@ struct InlineModelSelectorView: View {
 
             HStack(spacing: 6) {
                 Button {
-                    let next: AppModeKind = collaborationMode == .plan ? .default : .plan
-                    Task {
-                        try? await appModel.store.setThreadCollaborationMode(
-                            key: threadKey, mode: next
-                        )
+                    let current = effectiveCollaborationMode
+                    let next: AppModeKind = current == .plan ? .default : .plan
+                    if let threadKey {
+                        Task {
+                            try? await appModel.store.setThreadCollaborationMode(
+                                key: threadKey, mode: next
+                            )
+                        }
+                    } else {
+                        appState.pendingCollaborationMode = next
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -504,10 +528,10 @@ struct InlineModelSelectorView: View {
                         Text("Plan")
                             .litterFont(.caption2, weight: .medium)
                     }
-                    .foregroundColor(collaborationMode == .plan ? .black : LitterTheme.textPrimary)
+                    .foregroundColor(effectiveCollaborationMode == .plan ? .black : LitterTheme.textPrimary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(collaborationMode == .plan ? LitterTheme.accent : LitterTheme.surfaceLight)
+                    .background(effectiveCollaborationMode == .plan ? LitterTheme.accent : LitterTheme.surfaceLight)
                     .clipShape(Capsule())
                 }
 
@@ -580,7 +604,8 @@ struct ModelSelectorSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ScrollView {
+            VStack(spacing: 0) {
             ForEach(models) { model in
                 Button {
                     selectedModel = model.id
@@ -664,7 +689,7 @@ struct ModelSelectorSheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
 
-            Spacer()
+            }
         }
         .padding(.top, 20)
         .background(.ultraThinMaterial)

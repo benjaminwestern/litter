@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use crate::conversation_uniffi::HydratedConversationItem;
+use crate::conversation_uniffi::{HydratedConversationItem, HydratedConversationItemContent};
 use crate::types::AppSubagentStatus;
 use crate::types::{
     AppModeKind, AppPlanImplementationPromptSnapshot, AppPlanProgressSnapshot, PendingApproval,
@@ -31,6 +31,7 @@ pub struct AppServerSnapshot {
     pub rate_limits: Option<crate::types::RateLimitSnapshot>,
     pub available_models: Option<Vec<crate::types::ModelInfo>>,
     pub connection_progress: Option<AppConnectionProgressSnapshot>,
+    pub usage_stats: Option<AppServerUsageStats>,
 }
 
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -86,6 +87,8 @@ pub struct AppThreadSnapshot {
     pub model_context_window: Option<u64>,
     pub rate_limits: Option<crate::types::RateLimits>,
     pub realtime_session_id: Option<String>,
+    pub stats: Option<AppConversationStats>,
+    pub token_usage: Option<AppTokenUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -166,6 +169,85 @@ fn same_overlay_semantics(
     }
 }
 
+// ── Conversation statistics (per-thread, computed from hydrated items) ────
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppConversationStats {
+    // Messages
+    pub total_messages: u32,
+    pub user_message_count: u32,
+    pub assistant_message_count: u32,
+    pub turn_count: u32,
+    // Commands
+    pub commands_executed: u32,
+    pub commands_succeeded: u32,
+    pub commands_failed: u32,
+    pub total_command_duration_ms: i64,
+    // Files
+    pub files_changed: u32,
+    pub files_added: u32,
+    pub files_modified: u32,
+    pub files_deleted: u32,
+    pub diff_additions: u32,
+    pub diff_deletions: u32,
+    // Tools
+    pub tool_call_count: u32,
+    pub mcp_tool_call_count: u32,
+    pub dynamic_tool_call_count: u32,
+    pub web_search_count: u32,
+    // Media
+    pub image_count: u32,
+    pub code_review_count: u32,
+    pub widget_count: u32,
+    // Timing
+    pub session_duration_ms: Option<i64>,
+}
+
+// ── Token usage (per-thread, from server notifications) ──────────────────
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppTokenUsage {
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub context_window: Option<i64>,
+}
+
+// ── Server usage statistics (per-server, computed from thread snapshots) ─
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppServerUsageStats {
+    pub total_threads: u32,
+    pub active_threads: u32,
+    pub total_tokens: u64,
+    pub tokens_by_thread: Vec<AppTokensByThreadEntry>,
+    pub activity_by_day: Vec<AppActivityByDayEntry>,
+    pub model_usage: Vec<AppModelUsageEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppTokensByThreadEntry {
+    pub thread_title: String,
+    pub thread_id: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppActivityByDayEntry {
+    pub date_epoch: i64,
+    pub turn_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppModelUsageEntry {
+    pub model: String,
+    pub thread_count: u32,
+}
+
+// ── Session summary ──────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct AppSessionSummary {
     pub key: ThreadKey,
@@ -185,6 +267,21 @@ pub struct AppSessionSummary {
     pub has_active_turn: bool,
     pub is_subagent: bool,
     pub is_fork: bool,
+    // Display-specific fields
+    pub last_response_preview: Option<String>,
+    pub last_user_message: Option<String>,
+    pub last_tool_label: Option<String>,
+    pub recent_tool_log: Vec<AppToolLogEntry>,
+    // Stats (None when thread has no hydrated items)
+    pub stats: Option<AppConversationStats>,
+    pub token_usage: Option<AppTokenUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AppToolLogEntry {
+    pub tool: String,
+    pub detail: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -218,6 +315,9 @@ impl TryFrom<AppSnapshot> for AppSnapshotRecord {
                 let can_use_ipc =
                     can_use_transport_actions && ipc_state == AppServerIpcState::Ready;
 
+                let usage_stats =
+                    compute_server_usage_stats(&snapshot, &server.server_id);
+
                 AppServerSnapshot {
                     server_id: server.server_id,
                     display_name: server.display_name,
@@ -243,6 +343,7 @@ impl TryFrom<AppSnapshot> for AppSnapshotRecord {
                     rate_limits: server.rate_limits,
                     available_models: server.available_models,
                     connection_progress: server.connection_progress,
+                    usage_stats,
                 }
             })
             .collect::<Vec<_>>();
@@ -274,6 +375,11 @@ fn app_thread_snapshot_from_state(
 ) -> Result<AppThreadSnapshot, String> {
     let hydrated_conversation_items =
         merged_hydrated_items(&thread.items, &thread.local_overlay_items);
+    let stats = if hydrated_conversation_items.is_empty() {
+        None
+    } else {
+        Some(extract_conversation_activity(&hydrated_conversation_items).stats)
+    };
     Ok(AppThreadSnapshot {
         key: thread.key.clone(),
         info: thread.info.clone(),
@@ -299,6 +405,8 @@ fn app_thread_snapshot_from_state(
         model_context_window: thread.model_context_window,
         rate_limits: thread.rate_limits.clone(),
         realtime_session_id: thread.realtime_session_id.clone(),
+        stats,
+        token_usage: thread_token_usage(thread),
     })
 }
 
@@ -401,6 +509,9 @@ pub(crate) fn app_session_summary(
             .is_some_and(|value| !value.trim().is_empty());
     let is_fork = parent_thread_id.is_some();
 
+    // Derive conversation activity from hydrated items (if any).
+    let activity = extract_conversation_activity(&thread.items);
+
     AppSessionSummary {
         key: thread.key.clone(),
         server_display_name: server
@@ -437,6 +548,342 @@ pub(crate) fn app_session_summary(
         has_active_turn: thread.active_turn_id.is_some(),
         is_subagent: is_fork && has_agent_label,
         is_fork,
+        last_response_preview: activity.last_response,
+        last_user_message: activity.last_user_message,
+        last_tool_label: activity.last_tool,
+        recent_tool_log: activity.log,
+        stats: if thread.items.is_empty() { None } else { Some(activity.stats) },
+        token_usage: thread_token_usage(thread),
+    }
+}
+
+fn thread_token_usage(thread: &ThreadSnapshot) -> Option<AppTokenUsage> {
+    let used = thread.context_tokens_used?;
+    Some(AppTokenUsage {
+        total_tokens: used as i64,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        context_window: thread.model_context_window.map(|w| w as i64),
+    })
+}
+
+fn compute_server_usage_stats(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+) -> Option<AppServerUsageStats> {
+    let server_threads: Vec<&ThreadSnapshot> = snapshot
+        .threads
+        .values()
+        .filter(|t| t.key.server_id == server_id)
+        .collect();
+
+    if server_threads.is_empty() {
+        return None;
+    }
+
+    let total_threads = server_threads.len() as u32;
+    let active_threads = server_threads
+        .iter()
+        .filter(|t| t.active_turn_id.is_some())
+        .count() as u32;
+
+    let mut total_tokens: u64 = 0;
+    let mut tokens_by_thread = Vec::new();
+    let mut day_buckets: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+    let mut model_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+
+    for thread in &server_threads {
+        // Token usage per thread
+        if let Some(tokens) = thread.context_tokens_used {
+            total_tokens += tokens;
+            let title = thread
+                .info
+                .title
+                .as_deref()
+                .or(thread.info.preview.as_deref())
+                .unwrap_or("Untitled")
+                .to_string();
+            tokens_by_thread.push(AppTokensByThreadEntry {
+                thread_title: title,
+                thread_id: thread.key.thread_id.clone(),
+                tokens,
+            });
+        }
+
+        // Activity by day (bucket by updated_at date, midnight UTC)
+        if let Some(ts) = thread.info.updated_at {
+            let day_epoch = (ts / 86400) * 86400; // floor to midnight
+            *day_buckets.entry(day_epoch).or_insert(0) += 1;
+        }
+
+        // Model usage
+        let model = thread
+            .info
+            .model
+            .clone()
+            .or_else(|| thread.model.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        *model_counts.entry(model).or_insert(0) += 1;
+    }
+
+    tokens_by_thread.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+
+    let mut activity_by_day: Vec<AppActivityByDayEntry> = day_buckets
+        .into_iter()
+        .map(|(date_epoch, turn_count)| AppActivityByDayEntry {
+            date_epoch,
+            turn_count,
+        })
+        .collect();
+    activity_by_day.sort_by_key(|e| e.date_epoch);
+
+    let mut model_usage: Vec<AppModelUsageEntry> = model_counts
+        .into_iter()
+        .map(|(model, thread_count)| AppModelUsageEntry {
+            model,
+            thread_count,
+        })
+        .collect();
+    model_usage.sort_by(|a, b| b.thread_count.cmp(&a.thread_count));
+
+    Some(AppServerUsageStats {
+        total_threads,
+        active_threads,
+        total_tokens,
+        tokens_by_thread,
+        activity_by_day,
+        model_usage,
+    })
+}
+
+struct ConversationActivity {
+    last_response: Option<String>,
+    last_user_message: Option<String>,
+    last_tool: Option<String>,
+    stats: AppConversationStats,
+    log: Vec<AppToolLogEntry>,
+}
+
+/// Walk conversation items to extract full stats, last activity, and tool log.
+fn extract_conversation_activity(items: &[HydratedConversationItem]) -> ConversationActivity {
+    let mut last_response: Option<String> = None;
+    let mut last_user_message: Option<String> = None;
+    let mut last_tool: Option<String> = None;
+
+    // Stats accumulators
+    let mut total_messages: u32 = 0;
+    let mut user_message_count: u32 = 0;
+    let mut assistant_message_count: u32 = 0;
+    let mut commands_executed: u32 = 0;
+    let mut commands_succeeded: u32 = 0;
+    let mut commands_failed: u32 = 0;
+    let mut total_command_duration_ms: i64 = 0;
+    let mut files_changed: u32 = 0;
+    let mut files_added: u32 = 0;
+    let mut files_modified: u32 = 0;
+    let mut files_deleted: u32 = 0;
+    let mut diff_additions: u32 = 0;
+    let mut diff_deletions: u32 = 0;
+    let mut tool_call_count: u32 = 0;
+    let mut mcp_tool_call_count: u32 = 0;
+    let mut dynamic_tool_call_count: u32 = 0;
+    let mut web_search_count: u32 = 0;
+    let mut image_count: u32 = 0;
+    let mut code_review_count: u32 = 0;
+    let mut widget_count: u32 = 0;
+    let mut seen_turn_ids = std::collections::HashSet::new();
+    let mut first_ts: Option<f64> = None;
+    let mut last_ts: Option<f64> = None;
+    let mut log_entries: Vec<AppToolLogEntry> = Vec::new();
+
+    // Forward pass — collect everything
+    for item in items.iter() {
+        // Track timestamps for session duration
+        if let Some(ts) = item.timestamp {
+            if first_ts.is_none() {
+                first_ts = Some(ts);
+            }
+            last_ts = Some(ts);
+        }
+
+        // Turn counting via distinct source_turn_id
+        if let Some(ref turn_id) = item.source_turn_id {
+            if matches!(&item.content, HydratedConversationItemContent::User(_)) {
+                seen_turn_ids.insert(turn_id.clone());
+            }
+        }
+
+        match &item.content {
+            HydratedConversationItemContent::User(data) => {
+                user_message_count += 1;
+                total_messages += 1;
+                image_count += data.image_data_uris.len() as u32;
+            }
+            HydratedConversationItemContent::Assistant(_) => {
+                assistant_message_count += 1;
+                total_messages += 1;
+            }
+            HydratedConversationItemContent::CodeReview(_) => {
+                code_review_count += 1;
+                assistant_message_count += 1;
+                total_messages += 1;
+            }
+            HydratedConversationItemContent::CommandExecution(data) => {
+                commands_executed += 1;
+                tool_call_count += 1;
+                match data.status {
+                    crate::types::AppOperationStatus::Completed => commands_succeeded += 1,
+                    crate::types::AppOperationStatus::Failed => commands_failed += 1,
+                    _ => {}
+                }
+                if let Some(ms) = data.duration_ms {
+                    total_command_duration_ms += ms;
+                }
+                let cmd = data.command.trim();
+                let status = format!("{:?}", data.status).to_lowercase();
+                log_entries.push(AppToolLogEntry {
+                    tool: "Bash".to_string(),
+                    detail: cmd.to_string(),
+                    status,
+                });
+            }
+            HydratedConversationItemContent::FileChange(data) => {
+                for entry in &data.changes {
+                    files_changed += 1;
+                    tool_call_count += 1;
+                    diff_additions += entry.additions;
+                    diff_deletions += entry.deletions;
+                    let kind_lower = entry.kind.to_lowercase();
+                    if kind_lower.contains("add") {
+                        files_added += 1;
+                    } else if kind_lower.contains("delete") || kind_lower.contains("remove") {
+                        files_deleted += 1;
+                    } else {
+                        files_modified += 1;
+                    }
+                    let status = format!("{:?}", data.status).to_lowercase();
+                    log_entries.push(AppToolLogEntry {
+                        tool: "Edit".to_string(),
+                        detail: entry.path.clone(),
+                        status,
+                    });
+                }
+            }
+            HydratedConversationItemContent::McpToolCall(data) => {
+                mcp_tool_call_count += 1;
+                tool_call_count += 1;
+                let status = format!("{:?}", data.status).to_lowercase();
+                log_entries.push(AppToolLogEntry {
+                    tool: "MCP".to_string(),
+                    detail: data.tool.clone(),
+                    status,
+                });
+            }
+            HydratedConversationItemContent::DynamicToolCall(data) => {
+                dynamic_tool_call_count += 1;
+                tool_call_count += 1;
+                let status = format!("{:?}", data.status).to_lowercase();
+                log_entries.push(AppToolLogEntry {
+                    tool: "Tool".to_string(),
+                    detail: data.tool.clone(),
+                    status,
+                });
+            }
+            HydratedConversationItemContent::WebSearch(_) => {
+                web_search_count += 1;
+                tool_call_count += 1;
+            }
+            HydratedConversationItemContent::ImageView(_) => {
+                image_count += 1;
+            }
+            HydratedConversationItemContent::Widget(_) => {
+                widget_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Reverse pass for last assistant message, last user message, and last tool label
+    for item in items.iter().rev() {
+        if last_response.is_some() && last_user_message.is_some() && last_tool.is_some() {
+            break;
+        }
+        match &item.content {
+            HydratedConversationItemContent::Assistant(data) if last_response.is_none() => {
+                let text = data.text.trim();
+                if !text.is_empty() {
+                    last_response = Some(text.to_string());
+                }
+            }
+            HydratedConversationItemContent::User(data) if last_user_message.is_none() => {
+                let text = data.text.trim();
+                if !text.is_empty() {
+                    last_user_message = Some(text.to_string());
+                }
+            }
+            HydratedConversationItemContent::CommandExecution(data) if last_tool.is_none() => {
+                let cmd = data.command.trim();
+                last_tool = Some(format!("Bash {}", cmd));
+            }
+            HydratedConversationItemContent::FileChange(data) if last_tool.is_none() => {
+                if let Some(entry) = data.changes.first() {
+                    last_tool = Some(format!("Edit {}", entry.path));
+                }
+            }
+            HydratedConversationItemContent::McpToolCall(data) if last_tool.is_none() => {
+                last_tool = Some(format!("MCP {}", data.tool));
+            }
+            HydratedConversationItemContent::DynamicToolCall(data) if last_tool.is_none() => {
+                last_tool = Some(format!("Tool {}", data.tool));
+            }
+            _ => {}
+        }
+    }
+
+    let session_duration_ms = match (first_ts, last_ts) {
+        (Some(first), Some(last)) if last > first => Some(((last - first) * 1000.0) as i64),
+        _ => None,
+    };
+
+    // Keep only the last ~8 entries for the log
+    let log = if log_entries.len() > 8 {
+        log_entries.split_off(log_entries.len() - 8)
+    } else {
+        log_entries
+    };
+
+    ConversationActivity {
+        last_response,
+        last_user_message,
+        last_tool,
+        stats: AppConversationStats {
+            total_messages,
+            user_message_count,
+            assistant_message_count,
+            turn_count: seen_turn_ids.len() as u32,
+            commands_executed,
+            commands_succeeded,
+            commands_failed,
+            total_command_duration_ms,
+            files_changed,
+            files_added,
+            files_modified,
+            files_deleted,
+            diff_additions,
+            diff_deletions,
+            tool_call_count,
+            mcp_tool_call_count,
+            dynamic_tool_call_count,
+            web_search_count,
+            image_count,
+            code_review_count,
+            widget_count,
+            session_duration_ms,
+        },
+        log,
     }
 }
 

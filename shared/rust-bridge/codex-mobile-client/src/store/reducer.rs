@@ -2489,6 +2489,7 @@ fn append_mcp_progress(
                             } else {
                                 vec![message.to_string()]
                             },
+                            computer_use: None,
                         });
                     if item.source_turn_id.is_none() {
                         item.source_turn_id = thread.active_turn_id.clone();
@@ -2515,6 +2516,7 @@ fn append_mcp_progress(
                     } else {
                         vec![message.to_string()]
                     },
+                    computer_use: None,
                 }),
                 source_turn_id: thread.active_turn_id.clone(),
                 source_turn_index: None,
@@ -3198,6 +3200,7 @@ mod tests {
                         raw_output_json: None,
                         error_message: None,
                         progress_messages: Vec::new(),
+                        computer_use: None,
                     },
                 ),
                 source_turn_id: Some("turn-1".to_string()),

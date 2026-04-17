@@ -14,7 +14,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     SWIFT_STRICT_CONCURRENCY: targeted
-    MARKETING_VERSION: "1.0.3"
+    MARKETING_VERSION: "1.0.4"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Litter/Bridge/codex_bridge_objc.h
     OTHER_LDFLAGS: "$(inherited) -lc++ -lz -lcodex_mobile_client"
@@ -38,6 +38,7 @@ targets:
       path: Sources/Litter/Litter.entitlements
       properties:
         aps-environment: production
+        com.apple.developer.carplay-voice-based-conversation: true
         com.apple.security.application-groups:
           - group.com.sigkitten.litter
     attributes:
@@ -137,6 +138,7 @@ targets:
           LIVE_ACTIVITY_CODE_SIGN_STYLE: Automatic
           PROVISIONING_PROFILE_SPECIFIER: "$(LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER)"
           LIVE_ACTIVITY_PROVISIONING_PROFILE_SPECIFIER: ""
+          ENABLE_DEBUG_DYLIB: NO
         Release:
           CODE_SIGN_STYLE: "$(LIVE_ACTIVITY_CODE_SIGN_STYLE)"
           LIVE_ACTIVITY_CODE_SIGN_STYLE: Automatic

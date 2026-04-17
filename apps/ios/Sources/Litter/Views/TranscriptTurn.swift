@@ -295,7 +295,7 @@ struct TranscriptTurn: Identifiable, Equatable {
                     metrics.explicitDurationMillis += durationMs
                     metrics.hasExplicitDuration = true
                 }
-            case .fileChange, .turnDiff, .multiAgentAction, .webSearch, .imageView:
+            case .fileChange, .turnDiff, .multiAgentAction, .webSearch, .imageView, .imageGeneration:
                 metrics.toolCallCount += 1
             case .mcpToolCall(let data):
                 metrics.toolCallCount += 1
@@ -420,6 +420,12 @@ struct TranscriptTurn: Identifiable, Equatable {
             return data.query.isEmpty ? "Searched web" : "Searched web for \(data.query)"
         case .imageView(let data):
             return "Viewed image: \(workspaceTitle(for: data.path))"
+        case .imageGeneration(let data):
+            switch data.status {
+            case .completed: return "Generated image"
+            case .failed: return "Image generation failed"
+            default: return "Generating image"
+            }
         case .widget(let data):
             return "Widget: \(data.widgetState.title)"
         case .userInputResponse(let data):

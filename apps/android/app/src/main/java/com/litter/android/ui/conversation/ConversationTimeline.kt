@@ -167,9 +167,14 @@ fun ConversationTimelineItem(
             data = content.v1,
         )
 
-        is HydratedConversationItemContent.McpToolCall -> McpToolCallRow(
-            data = content.v1,
-        )
+        is HydratedConversationItemContent.McpToolCall -> {
+            val cu = content.v1.computerUse
+            if (cu != null) {
+                ComputerUseToolCallRow(data = content.v1, view = cu)
+            } else {
+                McpToolCallRow(data = content.v1)
+            }
+        }
 
         is HydratedConversationItemContent.DynamicToolCall -> DynamicToolCallRow(
             data = content.v1,
@@ -186,6 +191,10 @@ fun ConversationTimelineItem(
         is HydratedConversationItemContent.ImageView -> ImageViewRow(
             data = content.v1,
             serverId = serverId,
+        )
+
+        is HydratedConversationItemContent.ImageGeneration -> ImageGenerationRow(
+            data = content.v1,
         )
 
         is HydratedConversationItemContent.Widget -> WidgetRow(
@@ -222,6 +231,7 @@ private fun HydratedConversationItemContent.shouldAutoFollowRenderedContent(): B
         is HydratedConversationItemContent.MultiAgentAction,
         is HydratedConversationItemContent.WebSearch,
         is HydratedConversationItemContent.ImageView,
+        is HydratedConversationItemContent.ImageGeneration,
         is HydratedConversationItemContent.Widget -> true
         else -> false
     }
@@ -256,7 +266,7 @@ private fun UserMessageRow(
                 )
                 .padding(10.dp),
         ) {
-            Text(
+            com.litter.android.ui.common.FormattedText(
                 text = data.text,
                 color = LitterTheme.textPrimary,
                 fontSize = LitterTextStyle.callout.scaled,
@@ -861,6 +871,109 @@ private fun McpToolCallRow(
     }
 }
 
+// ── Computer Use Tool Call (computer-use MCP) ───────────────────────────────
+
+@Composable
+private fun ComputerUseToolCallRow(
+    data: uniffi.codex_mobile_client.HydratedMcpToolCallData,
+    view: uniffi.codex_mobile_client.ComputerUseView,
+) {
+    ToolCardShell(
+        summary = view.summary,
+        accent = LitterTheme.toolCallMcpCall,
+        status = data.status,
+        durationMs = data.durationMs,
+    ) {
+        view.screenshotPng?.let { bytes ->
+            ScreenshotPreview(bytes)
+        }
+        data.errorMessage?.takeIf { it.isNotBlank() }?.let {
+            InlineTextSection("Error", it, tone = LitterTheme.danger)
+        }
+        view.accessibilityText?.takeIf { it.isNotBlank() }?.let {
+            AccessibilityTreeSection(it)
+        }
+    }
+}
+
+@Composable
+private fun ScreenshotPreview(bytes: ByteArray) {
+    val bitmap = remember(bytes) {
+        try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+    if (bitmap == null) {
+        InlineTextSection("Screenshot", "Unavailable", tone = LitterTheme.textMuted)
+        return
+    }
+    Column {
+        Text(
+            text = "SCREENSHOT",
+            color = LitterTheme.textSecondary,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Image(
+            bitmap = bitmap,
+            contentDescription = "Computer Use screenshot",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(LitterTheme.codeBackground),
+        )
+    }
+}
+
+@Composable
+private fun AccessibilityTreeSection(text: String) {
+    var expanded by remember(text) { mutableStateOf(false) }
+    val lines = remember(text) { text.split('\n') }
+    val previewLineCount = 6
+    val display = if (expanded || lines.size <= previewLineCount) {
+        text
+    } else {
+        lines.take(previewLineCount).joinToString("\n") + "\n… (${lines.size - previewLineCount} more lines)"
+    }
+
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "ACCESSIBILITY TREE",
+                color = LitterTheme.textSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            if (lines.size > previewLineCount) {
+                Text(
+                    text = if (expanded) "Collapse" else "Expand",
+                    color = LitterTheme.accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable { expanded = !expanded },
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = display,
+            color = LitterTheme.textSecondary,
+            fontSize = 11.sp,
+            fontFamily = BerkeleyMono,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(LitterTheme.codeBackground)
+                .padding(10.dp),
+        )
+    }
+}
+
 // ── Dynamic Tool Call ────────────────────────────────────────────────────────
 
 @Composable
@@ -923,6 +1036,118 @@ private fun ImageViewRow(
     ) {
         ImageResultSection(path = data.path, serverId = serverId)
         KeyValueSection("Metadata", listOf("Path" to data.path))
+    }
+}
+
+@Composable
+private fun ImageGenerationRow(
+    data: uniffi.codex_mobile_client.HydratedImageGenerationData,
+) {
+    val summary = when (data.status) {
+        AppOperationStatus.COMPLETED -> "Generated image"
+        AppOperationStatus.FAILED -> "Image generation failed"
+        else -> "Generating image…"
+    }
+    ToolCardShell(
+        summary = summary,
+        accent = LitterTheme.accent,
+        status = data.status,
+        defaultExpanded = true,
+    ) {
+        GeneratedImageSection(data = data)
+        data.revisedPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+            RevisedPromptSection(prompt)
+        }
+        data.savedPath?.takeIf { it.isNotBlank() }?.let { path ->
+            KeyValueSection("Metadata", listOf("Saved to" to path))
+        }
+    }
+}
+
+@Composable
+private fun GeneratedImageSection(
+    data: uniffi.codex_mobile_client.HydratedImageGenerationData,
+) {
+    val bitmap = remember(data.imagePng) {
+        val bytes = data.imagePng ?: return@remember null
+        try {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SectionLabel("Image")
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LitterTheme.codeBackground, RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                bitmap != null -> {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = "Generated image",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                    )
+                }
+                data.status == AppOperationStatus.IN_PROGRESS ||
+                    data.status == AppOperationStatus.PENDING -> {
+                    CircularProgressIndicator(
+                        color = LitterTheme.accent,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.padding(vertical = 24.dp),
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "Image unavailable",
+                        color = LitterTheme.textMuted,
+                        fontSize = LitterTextStyle.caption.scaled,
+                        modifier = Modifier.padding(vertical = 20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RevisedPromptSection(prompt: String) {
+    var expanded by remember(prompt) { mutableStateOf(false) }
+    val isLong = prompt.length > 220 || prompt.count { it == '\n' } >= 4
+    val display = if (expanded || !isLong) prompt else prompt.take(220).trimEnd() + "…"
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Revised Prompt")
+            Spacer(Modifier.weight(1f))
+            if (isLong) {
+                Text(
+                    text = if (expanded) "Collapse" else "Expand",
+                    color = LitterTheme.accent,
+                    fontSize = LitterTextStyle.caption2.scaled,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable { expanded = !expanded },
+                )
+            }
+        }
+        Text(
+            text = display,
+            color = LitterTheme.textSecondary,
+            fontSize = LitterTextStyle.body.scaled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(LitterTheme.codeBackground, RoundedCornerShape(8.dp))
+                .padding(10.dp),
+        )
     }
 }
 

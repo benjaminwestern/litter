@@ -2236,12 +2236,12 @@ mod tests {
     fn test_server_launch_command_for_codex() {
         let command = server_launch_command(
             &RemoteCodexBinary::Codex("/usr/local/bin/codex".into()),
-            "ws://0.0.0.0:8390",
+            "ws://127.0.0.1:8390",
             RemoteShell::Posix,
         );
         assert_eq!(
             command,
-            "'/usr/local/bin/codex' app-server --listen 'ws://0.0.0.0:8390'"
+            "'/usr/local/bin/codex' app-server --listen 'ws://127.0.0.1:8390'"
         );
     }
 
@@ -2400,7 +2400,7 @@ mod tests {
         assert!(script.contains("/usr/local/bin/codex"));
         assert!(
             script.find("command -v codex 2>/dev/null || true")
-                < script.find("pnpm bin -g").unwrap()
+                < script.find("pnpm bin -g")
         );
         assert!(!script.contains("codex-app-server"));
     }

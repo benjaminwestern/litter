@@ -54,13 +54,15 @@ Use this flow to make Codex sessions from your Mac visible in the iOS/Android ap
    - Keep phone and Mac on the same LAN (or same Tailnet).
    - In Discovery: tap a host showing `codex running` to connect directly, or tap an `SSH` host and enter credentials.
 
-4. Fallback: run app-server manually on Mac and add server manually in app.
+4. Fallback: run app-server manually bound to loopback and forward the port over SSH.
+
+   On the Mac:
 
    ```bash
-   codex app-server --listen ws://0.0.0.0:8390
+   codex app-server --listen ws://127.0.0.1:8390
    ```
 
-   Then in app choose `Add Server` and enter `<mac-ip>` + `8390`.
+   Then connect the phone via the `SSH` flow in Discovery — Litter opens the SSH connection, port-forwards `127.0.0.1:8390`, and connects through the tunnel. Do not bind `0.0.0.0` unless you fully understand the exposure; the SSH flow is the supported path.
 
 5. Thread/session listing is `cwd`-scoped. If expected sessions are missing, choose the same working directory used when those sessions were created.
 
