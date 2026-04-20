@@ -107,9 +107,12 @@ mod tests {
             is_subagent: false,
             is_fork: false,
             last_response_preview: None,
+            last_response_turn_id: None,
             last_user_message: None,
             last_tool_label: None,
             recent_tool_log: vec![],
+            last_turn_start_ms: None,
+            last_turn_end_ms: None,
             stats: None,
             token_usage: None,
         }

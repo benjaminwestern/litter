@@ -49,6 +49,16 @@ shlex = "1"
 strip = true
 lto = true
 
+# Used by the iOS fast lanes (`--fast-device`, `--fast-sim`).
+# `debug = 1` emits line tables only — crashes still resolve to file:line,
+# but the massive per-variable DWARF (which pushes the default `dev`
+# staticlib to ~2.7GB) is gone. Expect ~10× smaller libcodex_mobile_client.a
+# and a correspondingly faster Swift link step.
+[profile.ios-dev]
+inherits = "dev"
+debug = 1
+codegen-units = 256
+
 [profile.mobile-release]
 inherits = "release"
 lto = false

@@ -396,9 +396,12 @@ enum LitterPreviewData {
                 isSubagent: thread.info.parentThreadId != nil,
                 isFork: thread.info.parentThreadId != nil,
                 lastResponsePreview: nil,
+                lastResponseTurnId: nil,
                 lastUserMessage: nil,
                 lastToolLabel: nil,
                 recentToolLog: [],
+                lastTurnStartMs: nil,
+                lastTurnEndMs: nil,
                 stats: nil,
                 tokenUsage: nil
             )

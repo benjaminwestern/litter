@@ -148,7 +148,7 @@ ANDROID_RUST_SOURCES := $(shell find $(RUST_DIR) \
 
 $(shell mkdir -p $(STAMPS))
 
-.PHONY: all ios ios-sim ios-sim-fast ios-sim-run ios-device ios-device-fast ios-device-run ios-run verify-ios-project \
+.PHONY: all ios ios-sim ios-sim-fast ios-sim-run ios-device ios-device-fast ios-device-run ios-device-stop ios-run verify-ios-project \
 	android android-fast android-emulator-fast android-emulator-run android-device-run android-release android-debug android-install android-emulator-install \
 	rust-ios rust-ios-package rust-ios-device-release rust-ios-device-fast rust-ios-sim-fast rust-android rust-check rust-test rust-host-dev \
 	bindings bindings-swift bindings-kotlin \
@@ -191,8 +191,31 @@ ios-device-run: ios-device-fast
 	IOS_DEVICE_PROFILE='$(IOS_DEVICE_PROFILE)' \
 	IOS_DEVICE_PROFILE_TEMPLATE='$(IOS_DEVICE_PROFILE_TEMPLATE)' \
 	IOS_DEVICE_PROFILE_TIME_LIMIT='$(IOS_DEVICE_PROFILE_TIME_LIMIT)' \
+	IOS_DEVICE_PROFILE_LAUNCH='$(IOS_DEVICE_PROFILE_LAUNCH)' \
+	IOS_DEVICE_PROFILE_DETACH='$(IOS_DEVICE_PROFILE_DETACH)' \
 	IOS_RUN_ARTIFACTS_DIR='$(IOS_RUN_ARTIFACTS_DIR)' \
 	$(IOS_SCRIPTS)/run-device.sh
+
+# Gracefully stop the most-recent detached xctrace recording. Sends
+# SIGINT (the same signal Ctrl+C would send) so xctrace finalizes the
+# .trace file instead of truncating it. Use after `make ios-device-run`
+# with `IOS_DEVICE_PROFILE_DETACH=1`.
+ios-device-stop:
+	@latest_pid_file=$$(ls -1t $(IOS_RUN_ARTIFACTS_DIR)/*/profile.pid 2>/dev/null | head -1); \
+	if [[ -z "$$latest_pid_file" ]]; then \
+		echo "==> No detached xctrace run found under $(IOS_RUN_ARTIFACTS_DIR)"; \
+		exit 1; \
+	fi; \
+	pid=$$(cat "$$latest_pid_file"); \
+	run_dir=$$(dirname "$$latest_pid_file"); \
+	if ! kill -0 "$$pid" 2>/dev/null; then \
+		echo "==> No xctrace process at pid $$pid (stale pid file: $$latest_pid_file)"; \
+		exit 1; \
+	fi; \
+	echo "==> Stopping xctrace pid $$pid and finalizing trace..."; \
+	kill -INT "$$pid"; \
+	while kill -0 "$$pid" 2>/dev/null; do sleep 0.5; done; \
+	echo "==> Finalized: $$run_dir/profile.trace"
 
 ios-run: ios
 	@open $(IOS_DIR)/Litter.xcodeproj

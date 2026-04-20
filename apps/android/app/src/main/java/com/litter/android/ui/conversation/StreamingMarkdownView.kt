@@ -35,7 +35,9 @@ import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.LocalTextScale
 import com.litter.android.ui.scaled
+import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
+import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.prism4j.Prism4j
 import uniffi.codex_mobile_client.AppMessageRenderBlock
@@ -149,16 +151,6 @@ private fun StreamingMarkdownText(
 ) {
     val context = LocalContext.current
     val textScale = LocalTextScale.current
-    val markwon = remember(context) {
-        try {
-            val prism4j = Prism4j(com.litter.android.ui.Prism4jGrammarLocator())
-            Markwon.builder(context)
-                .usePlugin(SyntaxHighlightPlugin.create(prism4j, io.noties.markwon.syntax.Prism4jThemeDarkula.create()))
-                .build()
-        } catch (_: Exception) {
-            Markwon.create(context)
-        }
-    }
 
     // Respect the mono/system font toggle from theme settings. iOS mirrors
     // this via `LitterFont.markdownFontName` (Extensions.swift:131-138):
@@ -174,6 +166,26 @@ private fun StreamingMarkdownText(
             }.getOrNull() ?: android.graphics.Typeface.MONOSPACE
         } else {
             android.graphics.Typeface.DEFAULT
+        }
+    }
+
+    // Markwon's default CorePlugin forces `Typeface.MONOSPACE` and a 0.87×
+    // size multiplier on inline code, which visually mismatches the body
+    // typeface. Pin `codeTypeface` to match body so inline code inherits
+    // the TextView's textSize without divergent metrics.
+    val markwon = remember(context, typeface) {
+        try {
+            val prism4j = Prism4j(com.litter.android.ui.Prism4jGrammarLocator())
+            Markwon.builder(context)
+                .usePlugin(object : AbstractMarkwonPlugin() {
+                    override fun configureTheme(builder: MarkwonTheme.Builder) {
+                        typeface?.let { builder.codeTypeface(it) }
+                    }
+                })
+                .usePlugin(SyntaxHighlightPlugin.create(prism4j, io.noties.markwon.syntax.Prism4jThemeDarkula.create()))
+                .build()
+        } catch (_: Exception) {
+            Markwon.create(context)
         }
     }
 

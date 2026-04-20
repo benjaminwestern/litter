@@ -34,14 +34,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.litter.android.state.displayTitle
 import com.litter.android.ui.LitterTheme
-import com.litter.android.ui.LocalAppModel
 import com.litter.android.ui.common.FormattedText
 import com.litter.android.ui.common.StatusDot
 import com.litter.android.ui.common.StatusDotState
 import com.litter.android.ui.scaled
 import com.litter.android.ui.LitterTextStyle
+import uniffi.codex_mobile_client.AppOperationStatus
 import uniffi.codex_mobile_client.AppSessionSummary
-import uniffi.codex_mobile_client.HydratedConversationItem
+import uniffi.codex_mobile_client.AppToolLogEntry
 
 /**
  * Zoom-aware session card, replacing the flat `SessionCard` used previously
@@ -69,14 +69,19 @@ fun SessionCanvasRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val appModel = LocalAppModel.current
-    val threadSnapshot = remember(session.key, zoomLevel) {
-        appModel.threadSnapshot(session.key)
-    }
-    val hydratedItems: List<HydratedConversationItem> =
-        threadSnapshot?.hydratedConversationItems.orEmpty()
+    // Rust's reducer already derives every field this card displays — last
+    // response text, recent tool log, last-turn bounds — into `session`.
+    // Reading `appModel.threadSnapshot(session.key)` here used to create a
+    // per-card subscription to the global snapshot observable; every
+    // streaming-delta bumped that observable and re-invalidated all cards
+    // even though most had nothing to redraw. Using only `session` props
+    // keeps the card's AttributeGraph footprint at one edge per row.
     val isActive = session.hasActiveTurn
-    val toolRunning = remember(hydratedItems) { isToolCallRunning(hydratedItems) }
+    val toolRunning = remember(session.recentToolLog) {
+        session.recentToolLog.lastOrNull()?.status?.let { status ->
+            status == "inprogress" || status == "pending"
+        } ?: false
+    }
 
     val dotState = when {
         isActive -> StatusDotState.ACTIVE
@@ -159,7 +164,6 @@ fun SessionCanvasRow(
                 ) {
                     MetaLine(
                         session = session,
-                        items = hydratedItems,
                         isActive = isActive,
                         toolRunning = toolRunning,
                     )
@@ -173,21 +177,23 @@ fun SessionCanvasRow(
                     Column {
                         ModelBadgeLine(
                             session = session,
-                            items = hydratedItems,
                             isActive = isActive,
                         )
                         RecentUserMessageLine(session = session)
                         ToolLogColumn(
-                            items = hydratedItems,
+                            entries = session.recentToolLog,
                             maxEntries = if (zoomLevel >= 4) 3 else 1,
                         )
-                        val assistant = remember(hydratedItems) {
-                            displayedAssistantMessage(hydratedItems)
-                        }
-                        val fallback = session.lastResponsePreview?.trim().orEmpty()
-                        val text = assistant?.text?.takeIf { it.trim().isNotEmpty() } ?: fallback
-                        val blockId = assistant?.id ?: "fallback"
-                        if (text.trim().isNotEmpty()) {
+                        val text = session.lastResponsePreview?.trim().orEmpty()
+                        // Key on the assistant message's source_turn_id so
+                        // the crossfade only fires when a new assistant
+                        // reply arrives. Keying on `stats.turnCount` would
+                        // bump the id the moment the user submits a new
+                        // prompt — before any new assistant text — so the
+                        // preview would fade out (and back in with the
+                        // same prior text) on every send.
+                        val blockId = session.lastResponseTurnId ?: "empty"
+                        if (text.isNotEmpty()) {
                             ResponsePreview(
                                 text = text,
                                 blockId = blockId,
@@ -238,7 +244,6 @@ fun SessionCanvasRow(
 @Composable
 private fun MetaLine(
     session: AppSessionSummary,
-    items: List<HydratedConversationItem>,
     isActive: Boolean,
     toolRunning: Boolean,
 ) {
@@ -303,7 +308,6 @@ private fun MetaLine(
         // HomeDashboardView.swift:713,722-749 renders these at zoom 2.
         InlineStats(
             session = session,
-            items = items,
             isActive = isActive,
         )
     }
@@ -311,10 +315,13 @@ private fun MetaLine(
 
 @Composable
 private fun ToolLogColumn(
-    items: List<HydratedConversationItem>,
+    entries: List<AppToolLogEntry>,
     maxEntries: Int,
 ) {
-    val rows = remember(items, maxEntries) { hydratedToolRows(items, maxEntries) }
+    // Rust-side `recent_tool_log` is newest-last; take the tail to mirror the
+    // old `hydratedToolRows` behavior. Replaces a per-card iteration over
+    // hydrated items.
+    val rows = remember(entries, maxEntries) { entries.takeLast(maxEntries) }
     if (rows.isEmpty()) return
     Column(
         modifier = Modifier
@@ -322,8 +329,8 @@ private fun ToolLogColumn(
             .padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        rows.forEach { row ->
-            HomeToolRowView(row = row)
+        rows.forEach { entry ->
+            HomeToolRowView(entry = entry)
         }
     }
 }

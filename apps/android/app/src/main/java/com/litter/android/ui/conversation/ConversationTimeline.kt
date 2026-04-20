@@ -78,7 +78,9 @@ import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.LocalTextScale
 import com.litter.android.ui.scaled
 import com.litter.android.state.AppModel
+import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
+import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.prism4j.Prism4j
 import org.json.JSONArray
@@ -1523,10 +1525,34 @@ private fun MarkdownText(
 
     val context = LocalContext.current
     val textScale = LocalTextScale.current
-    val markwon = remember(context) {
+
+    // Mirror StreamingMarkdownView: resolve body typeface from the mono/system
+    // theme toggle and pin Markwon's `codeTypeface` to it, so inline code uses
+    // the same font family and size as the surrounding body (Markwon's default
+    // swaps in `Typeface.MONOSPACE` at 0.87× which visibly mismatches).
+    val useMono = com.litter.android.ui.LitterThemeManager.monoFontEnabled
+    val typeface = remember(context, useMono) {
+        if (useMono) {
+            runCatching {
+                androidx.core.content.res.ResourcesCompat.getFont(
+                    context,
+                    com.sigkitten.litter.android.R.font.berkeley_mono_regular,
+                )
+            }.getOrNull() ?: android.graphics.Typeface.MONOSPACE
+        } else {
+            android.graphics.Typeface.DEFAULT
+        }
+    }
+
+    val markwon = remember(context, typeface) {
         try {
             val prism4j = Prism4j(com.litter.android.ui.Prism4jGrammarLocator())
             Markwon.builder(context)
+                .usePlugin(object : AbstractMarkwonPlugin() {
+                    override fun configureTheme(builder: MarkwonTheme.Builder) {
+                        typeface?.let { builder.codeTypeface(it) }
+                    }
+                })
                 .usePlugin(SyntaxHighlightPlugin.create(prism4j, io.noties.markwon.syntax.Prism4jThemeDarkula.create()))
                 .build()
         } catch (_: Exception) {
@@ -1538,6 +1564,7 @@ private fun MarkdownText(
         factory = { ctx ->
             TextView(ctx).apply {
                 setTextColor(LitterTheme.textBody.toArgb())
+                this.typeface = typeface
                 textSize = LitterTextStyle.body * textScale
                 movementMethod = LinkMovementMethod.getInstance()
                 setLinkTextColor(LitterTheme.accent.toArgb())
@@ -1545,6 +1572,7 @@ private fun MarkdownText(
         },
         update = { tv ->
             tv.setTextColor(LitterTheme.textBody.toArgb())
+            tv.typeface = typeface
             tv.textSize = LitterTextStyle.body * textScale
             markwon.setMarkdown(tv, text)
         },

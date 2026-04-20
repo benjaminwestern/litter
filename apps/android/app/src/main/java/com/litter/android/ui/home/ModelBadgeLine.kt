@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.dp
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppSessionSummary
-import uniffi.codex_mobile_client.HydratedConversationItem
 
 /**
  * Line showing "time ago · host · model" on the left and [InlineStats] on
@@ -30,7 +29,6 @@ import uniffi.codex_mobile_client.HydratedConversationItem
 @Composable
 fun ModelBadgeLine(
     session: AppSessionSummary,
-    items: List<HydratedConversationItem>,
     isActive: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -88,7 +86,6 @@ fun ModelBadgeLine(
         Spacer(modifier = Modifier.width(6.dp))
         InlineStats(
             session = session,
-            items = items,
             isActive = isActive,
             modifier = Modifier.wrapContentWidth(),
         )

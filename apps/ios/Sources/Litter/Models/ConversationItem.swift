@@ -594,32 +594,6 @@ extension HydratedConversationItem {
     }
 }
 
-extension Array where Element == HydratedConversationItem {
-    /// True when the most recent tool-capable item (command execution, MCP
-    /// tool call, dynamic tool call, or file change) is still running.
-    /// Walks newest-first and short-circuits on the first tool-capable item.
-    ///
-    /// Single canonical definition — the same 4-case match used to live in
-    /// two places (`SessionCanvasLine.isToolCallRunning` and an earlier
-    /// attempt in `HomeDashboardSupport`). Uses raw `HydratedConversationItem`
-    /// values so callers can reuse their thread snapshot without materializing
-    /// `ConversationItem` instances.
-    var latestToolCallInProgress: Bool {
-        for item in reversed() {
-            let status: AppOperationStatus
-            switch item.content {
-            case .commandExecution(let data): status = data.status
-            case .mcpToolCall(let data):      status = data.status
-            case .dynamicToolCall(let data):  status = data.status
-            case .fileChange(let data):       status = data.status
-            default: continue
-            }
-            return status == .pending || status == .inProgress
-        }
-        return false
-    }
-}
-
 private extension HydratedConversationItemContent {
     func conversationItemContent(itemId: String) -> ConversationItemContent {
         switch self {

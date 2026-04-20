@@ -245,6 +245,7 @@
 		D465AB9C7DB4638C39B534D0 /* ConversationComposerEntryRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075CAE1122242626CE33A93F /* ConversationComposerEntryRowView.swift */; };
 		D512CAC21DF746FA702B10EF /* RecentDirectoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CAFD307068C8BB4C5662367 /* RecentDirectoryStore.swift */; };
 		D58FC6C004925A1ADE722405 /* VoiceCallLockScreenCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A94820B14433013164204BB1 /* VoiceCallLockScreenCardView.swift */; };
+		D735D6BFA3F8F8B634B311B9 /* HomeSessionsScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0456BEC17E37D3A85AC7B2D /* HomeSessionsScrollView.swift */; };
 		D77023E14624950626E00AFE /* WallpaperAdjustView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE99A02238FD8184F77DD49 /* WallpaperAdjustView.swift */; };
 		DAF4F996443747E46D41007B /* light-plus.json in Resources */ = {isa = PBXBuildFile; fileRef = CFF9DBA865CCBB3308B5667D /* light-plus.json */; };
 		DD6CAD6B87A8D48854446B86 /* extraCommandsDictionary.plist in Resources */ = {isa = PBXBuildFile; fileRef = 7043F325D81EDDF6CE12024E /* extraCommandsDictionary.plist */; };
@@ -609,6 +610,7 @@
 		BE04FF38C9E336A47C7E161B /* PerformanceHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceHelpersTests.swift; sourceTree = "<group>"; };
 		BE81AFDF90E8ED46203AF90C /* ConversationOptionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationOptionsSheet.swift; sourceTree = "<group>"; };
 		BF245554F39E59E68B72EB22 /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		C0456BEC17E37D3A85AC7B2D /* HomeSessionsScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeSessionsScrollView.swift; sourceTree = "<group>"; };
 		C06841C29AA3E42E7DB137C0 /* Litter.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Litter.entitlements; sourceTree = "<group>"; };
 		C0C2B3DB9D57EA3A2A8608C6 /* FormattedText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattedText.swift; sourceTree = "<group>"; };
 		C14E5CB6E5CCE35CE26BC076 /* AppRuntimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntimeController.swift; sourceTree = "<group>"; };
@@ -1136,6 +1138,7 @@
 				2FB206863136DF3B8FA50457 /* HomeDashboardSupport.swift */,
 				4B6104B911C0E0B00FC5375F /* HomeDashboardView.swift */,
 				A3994BDBDC27E3555A77466B /* HomeModelChip.swift */,
+				C0456BEC17E37D3A85AC7B2D /* HomeSessionsScrollView.swift */,
 				592BE0CE703BB2B31738D8C2 /* HomeVoiceOrbButton.swift */,
 				85743F1AC88293BE8BBD27DA /* ImageGenerationToolCallView.swift */,
 				832D667C7B0B93EFED3577EE /* InlineHandoffView.swift */,
@@ -1600,6 +1603,7 @@
 				C866847E4BEBA8A05A0D1EB1 /* HomeDashboardSupport.swift in Sources */,
 				9887C4BF6EDA51F23E491EB2 /* HomeDashboardView.swift in Sources */,
 				615238756B8CFC83C78776EF /* HomeModelChip.swift in Sources */,
+				D735D6BFA3F8F8B634B311B9 /* HomeSessionsScrollView.swift in Sources */,
 				421FFC77E9CD0E243F365BBF /* HomeVoiceOrbButton.swift in Sources */,
 				4A8DA5F50486EBAF0C6520FA /* ImageGenerationToolCallView.swift in Sources */,
 				E1EEBECB89F39C947D704B6F /* InlineHandoffView.swift in Sources */,
@@ -1858,6 +1862,7 @@
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
 				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_EXPLICIT_MODULES = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
@@ -1907,6 +1912,7 @@
 				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lcodex_mobile_client";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_ENABLE_EXPLICIT_MODULES = YES;
 				SWIFT_INCLUDE_PATHS = "$(inherited) $(PROJECT_DIR)/GeneratedRust/Headers";
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/Litter/Bridge/codex_bridge_objc.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -1947,6 +1953,7 @@
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
 				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_EXPLICIT_MODULES = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
@@ -2003,6 +2010,7 @@
 				OTHER_LDFLAGS = "$(inherited) -lc++ -lz -lcodex_mobile_client";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_ENABLE_EXPLICIT_MODULES = YES;
 				SWIFT_INCLUDE_PATHS = "$(inherited) $(PROJECT_DIR)/GeneratedRust/Headers";
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/Litter/Bridge/codex_bridge_objc.h;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";

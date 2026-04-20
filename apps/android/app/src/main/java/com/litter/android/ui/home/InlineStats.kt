@@ -16,7 +16,6 @@ import androidx.compose.ui.unit.dp
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppSessionSummary
-import uniffi.codex_mobile_client.HydratedConversationItem
 
 /**
  * Compact right-aligned stat chip row: turn count / tool count / diff /
@@ -24,12 +23,16 @@ import uniffi.codex_mobile_client.HydratedConversationItem
  * badge at zoom 3+, taking just enough width so left-side text (which
  * carries `weight(1f)`) truncates before these chips compress.
  *
+ * Stopwatch bounds come from `session.lastTurnStartMs` / `lastTurnEndMs`
+ * (precomputed by the Rust reducer) so the card stays pure-prop-driven —
+ * no `appModel.threadSnapshot` read, no AttributeGraph subscription
+ * per session.
+ *
  * Ref: HomeDashboardView.swift:820-855 (`inlineStats`).
  */
 @Composable
 fun InlineStats(
     session: AppSessionSummary,
-    items: List<HydratedConversationItem>,
     isActive: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -38,7 +41,12 @@ fun InlineStats(
     val toolCallCount = stats?.toolCallCount?.toInt() ?: 0
     val additions = stats?.diffAdditions?.toInt() ?: 0
     val deletions = stats?.diffDeletions?.toInt() ?: 0
-    val bounds = lastTurnBounds(items, isActive = isActive)
+    val startSeconds = session.lastTurnStartMs?.let { it.toDouble() / 1000.0 }
+    val endSeconds = if (isActive) {
+        null
+    } else {
+        session.lastTurnEndMs?.let { it.toDouble() / 1000.0 }
+    }
     val tokenUsage = session.tokenUsage
 
     Row(
@@ -91,10 +99,10 @@ fun InlineStats(
                 )
             }
         }
-        if (bounds != null) {
+        if (startSeconds != null) {
             TurnStopwatchChip(
-                startSeconds = bounds.startSeconds,
-                endSeconds = bounds.endSeconds,
+                startSeconds = startSeconds,
+                endSeconds = endSeconds,
             )
         }
         val window = tokenUsage?.contextWindow
