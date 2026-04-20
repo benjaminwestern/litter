@@ -137,6 +137,90 @@ fn merged_hydrated_items(
     merged
 }
 
+pub(crate) fn project_hydrated_item(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    item: &HydratedConversationItem,
+) -> HydratedConversationItem {
+    let HydratedConversationItemContent::MultiAgentAction(data) = &item.content else {
+        return item.clone();
+    };
+
+    let projected_targets: Vec<String> = data
+        .targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| {
+            data.receiver_thread_ids
+                .get(index)
+                .and_then(|thread_id| resolve_agent_target_label(snapshot, server_id, thread_id))
+                .or_else(|| resolve_agent_target_label(snapshot, server_id, target))
+                .unwrap_or_else(|| target.clone())
+        })
+        .collect();
+
+    if projected_targets == data.targets {
+        return item.clone();
+    }
+
+    let mut projected = item.clone();
+    projected.content = HydratedConversationItemContent::MultiAgentAction(
+        crate::conversation_uniffi::HydratedMultiAgentActionData {
+            tool: data.tool.clone(),
+            status: data.status,
+            prompt: data.prompt.clone(),
+            targets: projected_targets,
+            receiver_thread_ids: data.receiver_thread_ids.clone(),
+            agent_states: data.agent_states.clone(),
+        },
+    );
+    projected
+}
+
+pub(crate) fn project_hydrated_items(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    items: &[HydratedConversationItem],
+) -> Vec<HydratedConversationItem> {
+    items.iter()
+        .map(|item| project_hydrated_item(snapshot, server_id, item))
+        .collect()
+}
+
+fn resolve_agent_target_label(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    raw: &str,
+) -> Option<String> {
+    let normalized = sanitized_label_field(Some(raw))?;
+    if looks_like_agent_display_label(normalized) {
+        return Some(normalized.to_string());
+    }
+
+    let key = ThreadKey {
+        server_id: server_id.to_string(),
+        thread_id: normalized.to_string(),
+    };
+    let thread = snapshot.threads.get(&key)?;
+    agent_display_label(
+        thread.info.agent_nickname.as_deref(),
+        thread.info.agent_role.as_deref(),
+        Some(normalized),
+    )
+}
+
+fn looks_like_agent_display_label(value: &str) -> bool {
+    if !value.ends_with(']') {
+        return false;
+    }
+    let Some(open_bracket) = value.rfind('[') else {
+        return false;
+    };
+    let nickname = value[..open_bracket].trim();
+    let role = value[open_bracket + 1..value.len() - 1].trim();
+    !nickname.is_empty() && !role.is_empty()
+}
+
 fn same_overlay_semantics(
     lhs: &crate::conversation_uniffi::HydratedConversationItem,
     rhs: &crate::conversation_uniffi::HydratedConversationItem,
@@ -389,8 +473,11 @@ fn app_thread_snapshot_from_state(
     snapshot: &AppSnapshot,
     thread: &ThreadSnapshot,
 ) -> Result<AppThreadSnapshot, String> {
-    let hydrated_conversation_items =
-        merged_hydrated_items(&thread.items, &thread.local_overlay_items);
+    let hydrated_conversation_items = project_hydrated_items(
+        snapshot,
+        &thread.key.server_id,
+        &merged_hydrated_items(&thread.items, &thread.local_overlay_items),
+    );
     let stats = if hydrated_conversation_items.is_empty() {
         None
     } else {
@@ -1582,5 +1669,94 @@ mod tests {
             projected.hydrated_conversation_items[0].id,
             "server-user-item"
         );
+    }
+
+    #[test]
+    fn app_thread_snapshot_projects_multi_agent_targets_to_display_labels() {
+        let mut snapshot = AppSnapshot::default();
+
+        let parent = ThreadSnapshot::from_info(
+            "srv",
+            ThreadInfo {
+                id: "parent-thread".to_string(),
+                title: Some("Parent".to_string()),
+                model: None,
+                preview: Some("Preview".to_string()),
+                cwd: None,
+                path: None,
+                model_provider: None,
+                agent_nickname: None,
+                agent_role: None,
+                parent_thread_id: None,
+                agent_status: None,
+                created_at: None,
+                status: ThreadSummaryStatus::Idle,
+                updated_at: Some(20),
+            },
+        );
+        let parent_key = parent.key.clone();
+        snapshot.threads.insert(parent_key.clone(), parent);
+
+        let child = ThreadSnapshot::from_info(
+            "srv",
+            ThreadInfo {
+                id: "child-thread".to_string(),
+                title: Some("Child".to_string()),
+                model: None,
+                preview: Some("Child preview".to_string()),
+                cwd: None,
+                path: None,
+                model_provider: None,
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("explorer".to_string()),
+                parent_thread_id: Some("parent-thread".to_string()),
+                agent_status: Some("running".to_string()),
+                created_at: None,
+                status: ThreadSummaryStatus::Active,
+                updated_at: Some(21),
+            },
+        );
+        snapshot.threads.insert(child.key.clone(), child);
+
+        snapshot
+            .threads
+            .get_mut(&parent_key)
+            .expect("parent thread exists")
+            .items
+            .push(crate::conversation_uniffi::HydratedConversationItem {
+                id: "collab-1".to_string(),
+                content: crate::conversation_uniffi::HydratedConversationItemContent::MultiAgentAction(
+                    crate::conversation_uniffi::HydratedMultiAgentActionData {
+                        tool: "spawnAgent".to_string(),
+                        status: crate::types::AppOperationStatus::Completed,
+                        prompt: Some("Inspect the thread".to_string()),
+                        targets: vec!["child-thread".to_string()],
+                        receiver_thread_ids: vec!["child-thread".to_string()],
+                        agent_states: vec![crate::conversation_uniffi::HydratedMultiAgentStateData {
+                            target_id: "child-thread".to_string(),
+                            status: crate::types::AppSubagentStatus::Running,
+                            message: Some("Working".to_string()),
+                        }],
+                    },
+                ),
+                source_turn_id: Some("turn-1".to_string()),
+                source_turn_index: Some(0),
+                timestamp: None,
+                is_from_user_turn_boundary: false,
+            });
+
+        let projected =
+            app_thread_snapshot_from_state(&snapshot, snapshot.threads.get(&parent_key).unwrap())
+                .unwrap();
+
+        let crate::conversation_uniffi::HydratedConversationItemContent::MultiAgentAction(data) =
+            &projected.hydrated_conversation_items[0].content
+        else {
+            panic!("expected multi-agent action item");
+        };
+
+        assert_eq!(data.targets, vec!["Scout [explorer]".to_string()]);
+        assert_eq!(data.receiver_thread_ids, vec!["child-thread".to_string()]);
+        assert_eq!(data.agent_states[0].target_id, "child-thread");
     }
 }

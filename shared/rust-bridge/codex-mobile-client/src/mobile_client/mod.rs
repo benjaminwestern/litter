@@ -1302,6 +1302,7 @@ impl MobileClient {
                         params: upstream::TurnSteerParams {
                             thread_id: params.thread_id.clone(),
                             input: direct_params.input.clone(),
+                            responsesapi_client_metadata: None,
                             expected_turn_id: active_turn_id,
                         },
                     },
@@ -1474,6 +1475,7 @@ impl MobileClient {
                 params: upstream::TurnSteerParams {
                     thread_id: key.thread_id.clone(),
                     input: draft.inputs,
+                    responsesapi_client_metadata: None,
                     expected_turn_id: active_turn_id,
                 },
             },
@@ -1597,6 +1599,7 @@ impl MobileClient {
                 )
                 .await
                 .map_err(|e| RpcError::Deserialization(e.to_string()))?;
+            let turns = response.thread.turns.clone();
             let mut snapshot = thread_snapshot_from_upstream_thread_with_overrides(
                 &key.server_id,
                 response.thread,
@@ -1607,6 +1610,7 @@ impl MobileClient {
             )
             .map_err(RpcError::Deserialization)?;
             copy_thread_runtime_fields(&current, &mut snapshot);
+            reconcile_active_turn(Some(&current), &mut snapshot, &turns);
             self.app_store.upsert_thread_snapshot(snapshot);
         }
 
@@ -1921,7 +1925,9 @@ impl MobileClient {
         Self::spawn_detached(async move {
             for delay_ms in USER_INPUT_RECONCILE_DELAYS_MS {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                match read_thread_response_from_app_server(Arc::clone(&session), &thread_id).await {
+                match read_thread_response_from_app_server(Arc::clone(&session), &thread_id, true)
+                    .await
+                {
                     Ok(response) => {
                         if let Err(error) = upsert_thread_snapshot_from_app_server_read_response(
                             &app_store, &server_id, response,
@@ -2074,6 +2080,7 @@ impl MobileClient {
                     text: "Implement the plan.".to_string(),
                     text_elements: Vec::new(),
                 }],
+                responsesapi_client_metadata: None,
                 cwd: None,
                 approval_policy: None,
                 approvals_reviewer: None,
@@ -2152,21 +2159,19 @@ pub(super) fn run_connect_warmup(
         let (account_result, thread_result) = tokio::join!(account_future, threads_future);
 
         match account_result {
-            Ok(()) => trace!(
-                "MobileClient: {label} account sync completed server_id={server_id}"
-            ),
-            Err(error) => warn!(
-                "MobileClient: {label} account sync failed server_id={server_id}: {error}"
-            ),
+            Ok(()) => trace!("MobileClient: {label} account sync completed server_id={server_id}"),
+            Err(error) => {
+                warn!("MobileClient: {label} account sync failed server_id={server_id}: {error}")
+            }
         }
 
         match thread_result {
-            Ok(()) => trace!(
-                "MobileClient: {label} thread refresh completed server_id={server_id}"
-            ),
-            Err(error) => warn!(
-                "MobileClient: {label} thread refresh failed server_id={server_id}: {error}"
-            ),
+            Ok(()) => {
+                trace!("MobileClient: {label} thread refresh completed server_id={server_id}")
+            }
+            Err(error) => {
+                warn!("MobileClient: {label} thread refresh failed server_id={server_id}: {error}")
+            }
         }
     });
 }

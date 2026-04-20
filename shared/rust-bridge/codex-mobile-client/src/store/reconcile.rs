@@ -324,6 +324,7 @@ impl MobileClient {
         .map_err(|e| e.to_string())?;
         if let Some(current) = current.as_ref() {
             crate::copy_thread_runtime_fields(current, &mut snapshot);
+            crate::reconcile_active_turn(Some(current), &mut snapshot, &response.thread.turns);
         }
         let next_key = snapshot.key.clone();
         self.app_store.upsert_thread_snapshot(snapshot);

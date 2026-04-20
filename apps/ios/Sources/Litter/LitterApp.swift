@@ -1183,14 +1183,7 @@ private struct ConversationDestinationScreen: View {
     var onInfo: (() -> Void)?
 
     private var conversationThread: AppThreadSnapshot? {
-        if let exact = appModel.threadSnapshot(for: threadKey) {
-            return exact
-        }
-        guard let activeKey = appModel.snapshot?.activeThread,
-              activeKey.serverId == threadKey.serverId else {
-            return nil
-        }
-        return appModel.threadSnapshot(for: activeKey)
+        appModel.threadSnapshot(for: threadKey)
     }
 
     private var resolvedThreadKey: ThreadKey {

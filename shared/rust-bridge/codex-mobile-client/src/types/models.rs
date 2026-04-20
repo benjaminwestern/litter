@@ -175,6 +175,9 @@ impl From<codex_protocol::account::PlanType> for PlanType {
             codex_protocol::account::PlanType::Enterprise => Self::Enterprise,
             codex_protocol::account::PlanType::Edu => Self::Edu,
             codex_protocol::account::PlanType::Unknown => Self::Unknown,
+            codex_protocol::account::PlanType::ProLite => Self::Unknown,
+            codex_protocol::account::PlanType::SelfServeBusinessUsageBased => Self::Business,
+            codex_protocol::account::PlanType::EnterpriseCbpUsageBased => Self::Enterprise,
         }
     }
 }
@@ -305,6 +308,123 @@ pub struct AppDynamicToolSpec {
     #[serde(default)]
     #[uniffi(default = false)]
     pub defer_loading: bool,
+}
+
+/// Output modality requested for a realtime session.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+#[derive(uniffi::Enum)]
+pub enum AppRealtimeOutputModality {
+    Text,
+    #[default]
+    Audio,
+}
+
+impl From<AppRealtimeOutputModality> for codex_protocol::protocol::RealtimeOutputModality {
+    fn from(value: AppRealtimeOutputModality) -> Self {
+        match value {
+            AppRealtimeOutputModality::Text => Self::Text,
+            AppRealtimeOutputModality::Audio => Self::Audio,
+        }
+    }
+}
+
+/// Transport used by a realtime session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[derive(uniffi::Enum)]
+pub enum AppRealtimeStartTransport {
+    Websocket,
+    Webrtc { sdp: String },
+}
+
+impl From<AppRealtimeStartTransport> for upstream::ThreadRealtimeStartTransport {
+    fn from(value: AppRealtimeStartTransport) -> Self {
+        match value {
+            AppRealtimeStartTransport::Websocket => Self::Websocket,
+            AppRealtimeStartTransport::Webrtc { sdp } => Self::Webrtc { sdp },
+        }
+    }
+}
+
+/// Voice option for realtime conversations.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+#[derive(uniffi::Enum)]
+pub enum AppRealtimeVoice {
+    Alloy,
+    Arbor,
+    Ash,
+    Ballad,
+    Breeze,
+    Cedar,
+    Coral,
+    Cove,
+    Echo,
+    Ember,
+    Juniper,
+    Maple,
+    Marin,
+    Sage,
+    Shimmer,
+    Sol,
+    Spruce,
+    Vale,
+    Verse,
+}
+
+impl From<AppRealtimeVoice> for codex_protocol::protocol::RealtimeVoice {
+    fn from(value: AppRealtimeVoice) -> Self {
+        use codex_protocol::protocol::RealtimeVoice as V;
+        match value {
+            AppRealtimeVoice::Alloy => V::Alloy,
+            AppRealtimeVoice::Arbor => V::Arbor,
+            AppRealtimeVoice::Ash => V::Ash,
+            AppRealtimeVoice::Ballad => V::Ballad,
+            AppRealtimeVoice::Breeze => V::Breeze,
+            AppRealtimeVoice::Cedar => V::Cedar,
+            AppRealtimeVoice::Coral => V::Coral,
+            AppRealtimeVoice::Cove => V::Cove,
+            AppRealtimeVoice::Echo => V::Echo,
+            AppRealtimeVoice::Ember => V::Ember,
+            AppRealtimeVoice::Juniper => V::Juniper,
+            AppRealtimeVoice::Maple => V::Maple,
+            AppRealtimeVoice::Marin => V::Marin,
+            AppRealtimeVoice::Sage => V::Sage,
+            AppRealtimeVoice::Shimmer => V::Shimmer,
+            AppRealtimeVoice::Sol => V::Sol,
+            AppRealtimeVoice::Spruce => V::Spruce,
+            AppRealtimeVoice::Vale => V::Vale,
+            AppRealtimeVoice::Verse => V::Verse,
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::RealtimeVoice> for AppRealtimeVoice {
+    fn from(value: codex_protocol::protocol::RealtimeVoice) -> Self {
+        use codex_protocol::protocol::RealtimeVoice as V;
+        match value {
+            V::Alloy => AppRealtimeVoice::Alloy,
+            V::Arbor => AppRealtimeVoice::Arbor,
+            V::Ash => AppRealtimeVoice::Ash,
+            V::Ballad => AppRealtimeVoice::Ballad,
+            V::Breeze => AppRealtimeVoice::Breeze,
+            V::Cedar => AppRealtimeVoice::Cedar,
+            V::Coral => AppRealtimeVoice::Coral,
+            V::Cove => AppRealtimeVoice::Cove,
+            V::Echo => AppRealtimeVoice::Echo,
+            V::Ember => AppRealtimeVoice::Ember,
+            V::Juniper => AppRealtimeVoice::Juniper,
+            V::Maple => AppRealtimeVoice::Maple,
+            V::Marin => AppRealtimeVoice::Marin,
+            V::Sage => AppRealtimeVoice::Sage,
+            V::Shimmer => AppRealtimeVoice::Shimmer,
+            V::Sol => AppRealtimeVoice::Sol,
+            V::Spruce => AppRealtimeVoice::Spruce,
+            V::Vale => AppRealtimeVoice::Vale,
+            V::Verse => AppRealtimeVoice::Verse,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

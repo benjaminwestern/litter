@@ -702,8 +702,11 @@ private struct ConversationMessageList: View {
                 .onChange(of: sendScrollToken) {
                     autoFollowStreaming = true
                     isNearBottom = true
+                    proxy.scrollTo("bottom", anchor: .bottom)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                        withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.9)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
                     }
                 }
                 .onChange(of: threadStatus) { oldStatus, _ in

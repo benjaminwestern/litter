@@ -98,7 +98,7 @@ fi
 echo "Fetching feedback..." >&2
 FEEDBACK_JSON="$("$ASC" testflight feedback list \
     --app "$APP_ID" \
-    "${PRV_FILTER[@]}" \
+    ${PRV_FILTER[@]+"${PRV_FILTER[@]}"} \
     --include-screenshots \
     --paginate \
     --output json 2>&1)"
@@ -121,7 +121,7 @@ fi
 if [[ "$OUTPUT_FORMAT" == "markdown" ]]; then
     "$ASC" testflight feedback list \
         --app "$APP_ID" \
-        "${PRV_FILTER[@]}" \
+        ${PRV_FILTER[@]+"${PRV_FILTER[@]}"} \
         --include-screenshots \
         --paginate \
         --output markdown 2>&1

@@ -29,7 +29,7 @@ use super::actions::{
 };
 use super::boundary::{
     app_session_summary, current_agent_directory_version, empty_session_summary,
-    project_thread_state_update, project_thread_update, AppSessionSummary,
+    project_hydrated_item, project_thread_state_update, project_thread_update, AppSessionSummary,
 };
 use super::snapshot::{
     AppConnectionProgressSnapshot, AppLifecyclePhaseSnapshot, AppQueuedFollowUpPreview,
@@ -2046,6 +2046,10 @@ impl AppStoreReducer {
     }
 
     pub(crate) fn emit_thread_item_changed(&self, key: &ThreadKey, item: HydratedConversationItem) {
+        let item = {
+            let snapshot = self.snapshot.read().expect("app store lock poisoned");
+            project_hydrated_item(&snapshot, &key.server_id, &item)
+        };
         let cache_key = (key.clone(), item.id.clone());
         {
             let mut cache = self
@@ -2817,7 +2821,7 @@ fn is_duplicate_overlay_item(
 fn is_superseded_overlay_item(
     local: &HydratedConversationItem,
     existing: &HydratedConversationItem,
-    active_turn_id: Option<&str>,
+    _active_turn_id: Option<&str>,
 ) -> bool {
     if is_duplicate_overlay_item(local, existing) {
         return true;
@@ -3315,6 +3319,71 @@ mod tests {
             }
             other => panic!("expected reasoning item, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn thread_item_changed_projects_multi_agent_targets_to_display_labels() {
+        let reducer = AppStoreReducer::new();
+        let parent_key = ThreadKey {
+            server_id: "srv".to_string(),
+            thread_id: "parent".to_string(),
+        };
+
+        reducer.upsert_thread_snapshot(ThreadSnapshot::from_info(
+            "srv",
+            make_thread_info("parent"),
+        ));
+
+        let mut child_info = make_thread_info("child-thread");
+        child_info.agent_nickname = Some("Scout".to_string());
+        child_info.agent_role = Some("explorer".to_string());
+        child_info.parent_thread_id = Some("parent".to_string());
+        reducer.upsert_thread_snapshot(ThreadSnapshot::from_info("srv", child_info));
+
+        let mut receiver = reducer.subscribe();
+        assert!(drain_updates(&mut receiver).is_empty());
+
+        reducer.apply_item_update(
+            &parent_key,
+            HydratedConversationItem {
+                id: "collab-1".to_string(),
+                content: HydratedConversationItemContent::MultiAgentAction(
+                    crate::conversation_uniffi::HydratedMultiAgentActionData {
+                        tool: "spawnAgent".to_string(),
+                        status: AppOperationStatus::Completed,
+                        prompt: Some("Inspect".to_string()),
+                        targets: vec!["child-thread".to_string()],
+                        receiver_thread_ids: vec!["child-thread".to_string()],
+                        agent_states: vec![crate::conversation_uniffi::HydratedMultiAgentStateData {
+                            target_id: "child-thread".to_string(),
+                            status: crate::types::AppSubagentStatus::Running,
+                            message: Some("Working".to_string()),
+                        }],
+                    },
+                ),
+                source_turn_id: Some("turn-1".to_string()),
+                source_turn_index: None,
+                timestamp: None,
+                is_from_user_turn_boundary: false,
+            },
+        );
+
+        let updates = drain_updates(&mut receiver);
+        let update_item = updates
+            .into_iter()
+            .find_map(|update| match update {
+                AppStoreUpdateRecord::ThreadItemChanged { key, item, .. } if key == parent_key => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("expected ThreadItemChanged update");
+
+        let HydratedConversationItemContent::MultiAgentAction(data) = update_item.content else {
+            panic!("expected multi-agent action update");
+        };
+        assert_eq!(data.targets, vec!["Scout [explorer]".to_string()]);
+        assert_eq!(data.receiver_thread_ids, vec!["child-thread".to_string()]);
     }
 
     #[test]

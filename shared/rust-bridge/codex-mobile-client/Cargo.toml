@@ -16,6 +16,8 @@ codex-app-server-protocol = { workspace = true }
 codex-ipc = { path = "../codex-ipc" }
 codex-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-login = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-config = { workspace = true }
 codex-cloud-requirements = { workspace = true }

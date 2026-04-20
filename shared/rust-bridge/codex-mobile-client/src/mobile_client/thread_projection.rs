@@ -58,18 +58,6 @@ pub fn copy_thread_runtime_fields(source: &ThreadSnapshot, target: &mut ThreadSn
         target.pending_plan_implementation_turn_id =
             source.pending_plan_implementation_turn_id.clone();
     }
-    // Preserve the active turn and status from the existing thread when the
-    // incoming snapshot would downgrade an active session to idle.  This
-    // prevents stale IPC snapshots (captured at turn boundaries) from briefly
-    // clearing the streaming state and causing UI flicker.
-    if source.info.status == ThreadSummaryStatus::Active
-        && target.info.status != ThreadSummaryStatus::Active
-    {
-        target.info.status = source.info.status.clone();
-        if target.active_turn_id.is_none() {
-            target.active_turn_id = source.active_turn_id.clone();
-        }
-    }
 }
 
 #[cfg(test)]
@@ -780,11 +768,12 @@ pub(super) fn session_is_current(
 pub(super) async fn read_thread_response_from_app_server(
     session: Arc<ServerSession>,
     thread_id: &str,
+    include_turns: bool,
 ) -> Result<upstream::ThreadReadResponse, RpcError> {
     let response = session
         .request(
             "thread/read",
-            serde_json::json!({ "threadId": thread_id, "includeTurns": true }),
+            serde_json::json!({ "threadId": thread_id, "includeTurns": include_turns }),
         )
         .await?;
     serde_json::from_value::<upstream::ThreadReadResponse>(response).map_err(|error| {
@@ -797,6 +786,7 @@ pub(super) fn upsert_thread_snapshot_from_app_server_read_response(
     server_id: &str,
     response: upstream::ThreadReadResponse,
 ) -> Result<(), RpcError> {
+    let turns = response.thread.turns.clone();
     let thread_id = response.thread.id.clone();
     let existing = app_store
         .snapshot()
@@ -818,6 +808,7 @@ pub(super) fn upsert_thread_snapshot_from_app_server_read_response(
     if let Some(existing) = existing.as_ref() {
         copy_thread_runtime_fields(existing, &mut snapshot);
     }
+    reconcile_active_turn(existing.as_ref(), &mut snapshot, &turns);
     app_store.upsert_thread_snapshot(snapshot);
     Ok(())
 }
@@ -850,7 +841,7 @@ pub(super) async fn recover_ipc_stream_cache_from_app_server(
         .collect::<Vec<_>>();
     drop(app_snapshot);
 
-    let response = read_thread_response_from_app_server(session, thread_id).await?;
+    let response = read_thread_response_from_app_server(session, thread_id, true).await?;
     let thread = response.thread.clone();
     upsert_thread_snapshot_from_app_server_read_response(&app_store, server_id, response)?;
 

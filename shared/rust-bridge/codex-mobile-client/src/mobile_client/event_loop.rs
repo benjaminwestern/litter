@@ -746,6 +746,11 @@ fn handle_bridge_output(
                         let mut snapshot = projection.snapshot;
                         if let Some(existing) = app_store.snapshot().threads.get(&key) {
                             copy_thread_runtime_fields(existing, &mut snapshot);
+                            reconcile_active_turn(
+                                Some(existing),
+                                &mut snapshot,
+                                &proj.thread.turns,
+                            );
                         }
                         app_store.upsert_thread_snapshot(snapshot);
                         sync_ipc_thread_requests_from_projection(

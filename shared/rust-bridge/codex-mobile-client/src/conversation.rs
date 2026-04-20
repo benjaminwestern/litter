@@ -282,7 +282,11 @@ fn convert_thread_item(
                 .and_then(|r| r.structured_content.as_ref())
                 .and_then(pretty_json);
             let computer_use = if server == "computer-use" {
-                Some(build_computer_use_view(tool, arguments, result.as_ref()))
+                Some(build_computer_use_view(
+                    tool,
+                    arguments,
+                    result.as_ref().map(|r| r.as_ref()),
+                ))
             } else {
                 None
             };
@@ -396,7 +400,7 @@ fn convert_thread_item(
         }
         ThreadItem::ImageView { path, .. } => (
             HydratedConversationItemContent::ImageView(HydratedImageViewData {
-                path: path.clone(),
+                path: path.to_string_lossy().into_owned(),
             }),
             false,
         ),
@@ -408,17 +412,20 @@ fn convert_thread_item(
             ..
         } => {
             let image_png = decode_image_generation_result(result);
+            let saved_path_string = saved_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned());
             let normalized_status = convert_image_generation_status(
                 status,
                 image_png.is_some(),
-                saved_path.as_deref(),
+                saved_path_string.as_deref(),
             );
             (
                 HydratedConversationItemContent::ImageGeneration(HydratedImageGenerationData {
                     status: normalized_status,
                     revised_prompt: revised_prompt.clone(),
                     image_png,
-                    saved_path: saved_path.clone(),
+                    saved_path: saved_path_string,
                 }),
                 false,
             )
