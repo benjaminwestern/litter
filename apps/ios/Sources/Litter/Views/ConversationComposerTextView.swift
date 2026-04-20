@@ -17,9 +17,12 @@ struct ConversationComposerTextView: UIViewRepresentable {
         textView.tintColor = UIColor(LitterTheme.accent)
         textView.textContainerInset = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 12)
         textView.textContainer.lineFragmentPadding = 0
-        textView.autocorrectionType = .no
-        textView.autocapitalizationType = .none
-        textView.spellCheckingType = .no
+        textView.autocorrectionType = .default
+        textView.autocapitalizationType = .sentences
+        textView.spellCheckingType = .default
+        textView.smartQuotesType = .default
+        textView.smartDashesType = .default
+        textView.smartInsertDeleteType = .default
         textView.keyboardDismissMode = .interactive
         textView.showsVerticalScrollIndicator = false
         textView.alwaysBounceVertical = false
