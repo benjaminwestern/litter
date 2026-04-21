@@ -39,7 +39,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 
 /**
  * Glass-ish capsule that morphs into a focused search field when tapped.
@@ -115,7 +117,7 @@ fun ThreadSearchBar(
                         .focusRequester(focusRequester),
                     textStyle = TextStyle(
                         color = LitterTheme.textPrimary,
-                        fontSize = 13.sp,
+                        fontSize = LitterTextStyle.code.scaled,
                         fontFamily = FontFamily.Monospace,
                     ),
                     singleLine = true,
@@ -127,7 +129,7 @@ fun ThreadSearchBar(
                                 Text(
                                     text = "search threads",
                                     color = LitterTheme.textSecondary,
-                                    fontSize = 13.sp,
+                                    fontSize = LitterTextStyle.code.scaled,
                                     fontFamily = FontFamily.Monospace,
                                 )
                             }
@@ -153,7 +155,7 @@ fun ThreadSearchBar(
                 Text(
                     text = "search threads",
                     color = LitterTheme.textSecondary,
-                    fontSize = 12.sp,
+                    fontSize = LitterTextStyle.caption.scaled,
                     fontFamily = FontFamily.Monospace,
                     textAlign = TextAlign.Start,
                 )

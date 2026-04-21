@@ -37,8 +37,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.litter.android.state.connectionModeLabel
 import com.litter.android.state.statusDotState
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.common.StatusDot
+import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppServerSnapshot
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -112,7 +114,7 @@ private fun ServerPill(
             Text(
                 text = server.displayName,
                 color = LitterTheme.textPrimary,
-                fontSize = 13.sp,
+                fontSize = LitterTextStyle.footnote.scaled,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = LitterTheme.monoFont,
                 maxLines = 1,
@@ -158,7 +160,7 @@ private fun AddServerPill(onTap: () -> Unit) {
         Text(
             text = "server",
             color = LitterTheme.accent,
-            fontSize = 13.sp,
+            fontSize = LitterTextStyle.footnote.scaled,
             fontWeight = FontWeight.SemiBold,
             fontFamily = LitterTheme.monoFont,
         )

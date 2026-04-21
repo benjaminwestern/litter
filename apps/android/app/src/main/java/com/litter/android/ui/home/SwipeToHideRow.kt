@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.litter.android.ui.LitterTextStyle
+import com.litter.android.ui.scaled
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -95,7 +97,7 @@ fun SwipeToHideRow(
                 Text(
                     text = "hide",
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = LitterTextStyle.footnote.scaled,
                 )
             }
         }

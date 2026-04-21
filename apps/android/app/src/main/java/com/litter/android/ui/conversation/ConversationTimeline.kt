@@ -246,9 +246,9 @@ private fun UserMessageRow(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
-    // Right-aligned user bubble, matching iOS `UserBubble`. The bubble caps at
-    // 85% of row width so long messages still wrap nicely without becoming a
-    // full-width block that reads as assistant text.
+    // Right-aligned user bubble matching iOS `UserBubble`: accent-tinted
+    // rounded rect that hugs content width, with a 60dp minimum gutter on
+    // the left so long messages wrap before reaching that edge.
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.End,
@@ -937,7 +937,7 @@ private fun ScreenshotPreview(bytes: ByteArray) {
         Text(
             text = "SCREENSHOT",
             color = LitterTheme.textSecondary,
-            fontSize = 10.sp,
+            fontSize = 10f.scaled,
             fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.height(4.dp))
@@ -969,7 +969,7 @@ private fun AccessibilityTreeSection(text: String) {
             Text(
                 text = "ACCESSIBILITY TREE",
                 color = LitterTheme.textSecondary,
-                fontSize = 10.sp,
+                fontSize = 10f.scaled,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
             )
@@ -977,7 +977,7 @@ private fun AccessibilityTreeSection(text: String) {
                 Text(
                     text = if (expanded) "Collapse" else "Expand",
                     color = LitterTheme.accent,
-                    fontSize = 10.sp,
+                    fontSize = 10f.scaled,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.clickable { expanded = !expanded },
                 )
@@ -987,7 +987,7 @@ private fun AccessibilityTreeSection(text: String) {
         Text(
             text = display,
             color = LitterTheme.textSecondary,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontFamily = BerkeleyMono,
             modifier = Modifier
                 .fillMaxWidth()
@@ -1852,7 +1852,7 @@ private fun DiffSection(
         SyntaxHighlightedDiffBlock(
             diff = content,
             titleHint = label.ifEmpty { null },
-            fontSize = 12.sp,
+            fontSize = LitterTextStyle.caption.scaled,
             modifier = Modifier
                 .fillMaxWidth()
                 .background(LitterTheme.codeBackground, RoundedCornerShape(8.dp))

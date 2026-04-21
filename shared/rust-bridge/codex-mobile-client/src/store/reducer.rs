@@ -5,7 +5,10 @@ use std::sync::RwLock;
 use codex_app_server_protocol as upstream;
 use tokio::sync::broadcast;
 
-use crate::conversation::{make_error_item, make_model_rerouted_item, make_turn_diff_item};
+use crate::conversation::{
+    command_output_is_truncated, make_error_item, make_model_rerouted_item, make_turn_diff_item,
+    truncate_command_output_text,
+};
 use crate::conversation_uniffi::{
     HydratedAssistantMessageData, HydratedCommandExecutionData, HydratedConversationItem,
     HydratedConversationItemContent, HydratedMcpToolCallData, HydratedProposedPlanData,
@@ -28,8 +31,8 @@ use super::actions::{
     thread_info_from_upstream_status_change,
 };
 use super::boundary::{
-    app_session_summary, current_agent_directory_version, empty_session_summary,
-    project_thread_state_update, project_thread_update, AppSessionSummary,
+    AppSessionSummary, app_session_summary, current_agent_directory_version, empty_session_summary,
+    project_hydrated_item, project_thread_state_update, project_thread_update,
 };
 use super::snapshot::{
     AppConnectionProgressSnapshot, AppLifecyclePhaseSnapshot, AppQueuedFollowUpPreview,
@@ -259,6 +262,14 @@ impl AppStoreReducer {
                     preserve_thread_title(&entry.info, &mut next_info);
                     preserve_thread_preview(&entry.info, &mut next_info);
                     preserve_thread_created_at(&entry.info, &mut next_info);
+                    // thread/list carries no turn data, so it cannot authoritatively
+                    // close an in-flight turn. Only TurnCompleted (or a rebuild that
+                    // includes the turn list) can downgrade Active → Idle.
+                    if matches!(next_info.status, ThreadSummaryStatus::Idle)
+                        && entry.active_turn_id.is_some()
+                    {
+                        next_info.status = entry.info.status.clone();
+                    }
                     let next_model = next_info.model.clone().or_else(|| entry.model.clone());
                     let info_changed = entry.info != next_info;
                     let model_changed = entry.model != next_model;
@@ -1883,7 +1894,16 @@ impl AppStoreReducer {
             if info.updated_at.is_some() {
                 thread.info.updated_at = info.updated_at;
             }
-            thread.info.status = info.status;
+            // ThreadStatusChanged is metadata-only; it cannot close an in-flight
+            // turn. Only TurnCompleted (or a rebuild with the turn list) is
+            // allowed to downgrade Active → Idle.
+            thread.info.status = if matches!(info.status, ThreadSummaryStatus::Idle)
+                && thread.active_turn_id.is_some()
+            {
+                thread.info.status.clone()
+            } else {
+                info.status
+            };
             mutate(thread);
             inserted
         };
@@ -2029,6 +2049,10 @@ impl AppStoreReducer {
     }
 
     pub(crate) fn emit_thread_item_changed(&self, key: &ThreadKey, item: HydratedConversationItem) {
+        let item = {
+            let snapshot = self.snapshot.read().expect("app store lock poisoned");
+            project_hydrated_item(&snapshot, &key.server_id, &item)
+        };
         let cache_key = (key.clone(), item.id.clone());
         {
             let mut cache = self
@@ -2426,10 +2450,13 @@ fn append_command_output_delta(
             let item = &mut thread.items[index];
             match &mut item.content {
                 HydratedConversationItemContent::CommandExecution(command) => {
-                    command
-                        .output
-                        .get_or_insert_with(String::new)
-                        .push_str(delta);
+                    let output = command.output.get_or_insert_with(String::new);
+                    if !command_output_is_truncated(output) {
+                        output.push_str(delta);
+                        if output.len() > 128 * 1024 {
+                            *output = truncate_command_output_text(output);
+                        }
+                    }
                     LiveDeltaApplyResult::Streamed
                 }
                 _ => {
@@ -2438,7 +2465,7 @@ fn append_command_output_delta(
                             command: String::new(),
                             cwd: String::new(),
                             status: AppOperationStatus::InProgress,
-                            output: Some(delta.to_string()),
+                            output: Some(truncate_command_output_text(delta)),
                             exit_code: None,
                             duration_ms: None,
                             process_id: None,
@@ -2460,7 +2487,7 @@ fn append_command_output_delta(
                         command: String::new(),
                         cwd: String::new(),
                         status: AppOperationStatus::InProgress,
-                        output: Some(delta.to_string()),
+                        output: Some(truncate_command_output_text(delta)),
                         exit_code: None,
                         duration_ms: None,
                         process_id: None,
@@ -2800,7 +2827,7 @@ fn is_duplicate_overlay_item(
 fn is_superseded_overlay_item(
     local: &HydratedConversationItem,
     existing: &HydratedConversationItem,
-    active_turn_id: Option<&str>,
+    _active_turn_id: Option<&str>,
 ) -> bool {
     if is_duplicate_overlay_item(local, existing) {
         return true;
@@ -3298,6 +3325,71 @@ mod tests {
             }
             other => panic!("expected reasoning item, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn thread_item_changed_projects_multi_agent_targets_to_display_labels() {
+        let reducer = AppStoreReducer::new();
+        let parent_key = ThreadKey {
+            server_id: "srv".to_string(),
+            thread_id: "parent".to_string(),
+        };
+
+        reducer
+            .upsert_thread_snapshot(ThreadSnapshot::from_info("srv", make_thread_info("parent")));
+
+        let mut child_info = make_thread_info("child-thread");
+        child_info.agent_nickname = Some("Scout".to_string());
+        child_info.agent_role = Some("explorer".to_string());
+        child_info.parent_thread_id = Some("parent".to_string());
+        reducer.upsert_thread_snapshot(ThreadSnapshot::from_info("srv", child_info));
+
+        let mut receiver = reducer.subscribe();
+        assert!(drain_updates(&mut receiver).is_empty());
+
+        reducer.apply_item_update(
+            &parent_key,
+            HydratedConversationItem {
+                id: "collab-1".to_string(),
+                content: HydratedConversationItemContent::MultiAgentAction(
+                    crate::conversation_uniffi::HydratedMultiAgentActionData {
+                        tool: "spawnAgent".to_string(),
+                        status: AppOperationStatus::Completed,
+                        prompt: Some("Inspect".to_string()),
+                        targets: vec!["child-thread".to_string()],
+                        receiver_thread_ids: vec!["child-thread".to_string()],
+                        agent_states: vec![
+                            crate::conversation_uniffi::HydratedMultiAgentStateData {
+                                target_id: "child-thread".to_string(),
+                                status: crate::types::AppSubagentStatus::Running,
+                                message: Some("Working".to_string()),
+                            },
+                        ],
+                    },
+                ),
+                source_turn_id: Some("turn-1".to_string()),
+                source_turn_index: None,
+                timestamp: None,
+                is_from_user_turn_boundary: false,
+            },
+        );
+
+        let updates = drain_updates(&mut receiver);
+        let update_item = updates
+            .into_iter()
+            .find_map(|update| match update {
+                AppStoreUpdateRecord::ThreadItemChanged { key, item, .. } if key == parent_key => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("expected ThreadItemChanged update");
+
+        let HydratedConversationItemContent::MultiAgentAction(data) = update_item.content else {
+            panic!("expected multi-agent action update");
+        };
+        assert_eq!(data.targets, vec!["Scout [explorer]".to_string()]);
+        assert_eq!(data.receiver_thread_ids, vec!["child-thread".to_string()]);
     }
 
     #[test]

@@ -40,7 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppProject
 import uniffi.codex_mobile_client.projectDefaultLabel
 
@@ -84,7 +86,7 @@ fun ProjectPickerSheet(
             Text(
                 text = "Projects",
                 color = LitterTheme.textPrimary,
-                fontSize = 15.sp,
+                fontSize = LitterTextStyle.subheadline.scaled,
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.weight(1f))
@@ -146,13 +148,13 @@ fun ProjectPickerSheet(
                 Text(
                     text = "No projects yet",
                     color = LitterTheme.textSecondary,
-                    fontSize = 14.sp,
+                    fontSize = LitterTextStyle.body.scaled,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
                     text = "Tap + to pick a directory and start your first thread.",
                     color = LitterTheme.textMuted,
-                    fontSize = 12.sp,
+                    fontSize = LitterTextStyle.caption.scaled,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
                 TextButton(onClick = onCreateNew) {
@@ -203,7 +205,7 @@ private fun ProjectRow(
             Text(
                 text = projectDefaultLabel(project.cwd),
                 color = LitterTheme.textPrimary,
-                fontSize = 14.sp,
+                fontSize = LitterTextStyle.body.scaled,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
@@ -212,7 +214,7 @@ private fun ProjectRow(
                     Text(
                         text = serverName,
                         color = LitterTheme.accent.copy(alpha = 0.75f),
-                        fontSize = 11.sp,
+                        fontSize = LitterTextStyle.caption2.scaled,
                         fontFamily = LitterTheme.monoFont,
                         maxLines = 1,
                     )
@@ -220,7 +222,7 @@ private fun ProjectRow(
                 Text(
                     text = project.cwd,
                     color = LitterTheme.textMuted,
-                    fontSize = 11.sp,
+                    fontSize = LitterTextStyle.caption2.scaled,
                     fontFamily = LitterTheme.monoFont,
                     maxLines = 1,
                 )

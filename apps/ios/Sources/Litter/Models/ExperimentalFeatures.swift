@@ -33,16 +33,15 @@ enum LitterFeature: String, CaseIterable, Identifiable {
         case .ipc: return false
         case .generativeUI: return false
         case .appleWatch:
-            // Enabled in Debug builds so local dev auto-pushes to a paired
-            // watch. Disabled in Release so shipping builds don't start
-            // WCSession or reach for a watch that isn't in the App Store
-            // binary anyway (see project.yml — watch target is not
-            // embedded in the iOS app).
-            #if DEBUG
-            return true
-            #else
+            // Off by default in both Debug and Release. The projection pipeline
+            // polls `AppModel.shared.snapshot` every 250ms on the main actor and
+            // runs two full `WatchProjection.tasks(...)` sweeps per tick; on an
+            // idle home screen that cost ~1.8s of main-thread CPU over a 23s
+            // trace (Instruments, 2026-04). Release already had it off to avoid
+            // WCSession startup without a companion binary embedded; Debug no
+            // longer auto-enables either. Flip in Settings → Experimental
+            // Features to test the watch pipeline locally.
             return false
-            #endif
         }
     }
 }

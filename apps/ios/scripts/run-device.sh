@@ -10,6 +10,17 @@ APP_EXECUTABLE_NAME="$(basename "${APP_PATH}" .app)"
 PROFILE_ENABLED="${IOS_DEVICE_PROFILE:-1}"
 PROFILE_TEMPLATE="${IOS_DEVICE_PROFILE_TEMPLATE:-Time Profiler}"
 PROFILE_TIME_LIMIT="${IOS_DEVICE_PROFILE_TIME_LIMIT:-}"
+# When 1, xctrace launches the app itself (`--launch -- <app>`) instead of
+# attaching post-launch. Required for SwiftUI signposts (View Body
+# Updates, Representable Updates) — those streams are only registered if
+# the process comes up under Instruments. Trade-off: devicectl's console
+# streaming is skipped in this mode since xctrace owns the process.
+PROFILE_LAUNCH_MODE="${IOS_DEVICE_PROFILE_LAUNCH:-0}"
+# When 1 (with launch-mode also on), kick xctrace off into the background
+# and exit the script immediately. You get back your shell; the trace
+# keeps recording. Stop it later with `kill -INT <pid>` — the PID is
+# printed to stdout and saved to `<RUN_DIR>/profile.pid`.
+PROFILE_DETACH="${IOS_DEVICE_PROFILE_DETACH:-0}"
 ARTIFACTS_ROOT="${IOS_RUN_ARTIFACTS_DIR:-${ROOT_DIR}/artifacts/ios-device-run}"
 TIMESTAMP="$(date +"%Y%m%d-%H%M%S")"
 RUN_DIR="${ARTIFACTS_ROOT}/${TIMESTAMP}"
@@ -447,14 +458,20 @@ cleanup() {
   trap - EXIT INT TERM
 
   if [[ -n "${PROFILE_PID}" ]]; then
+    # Send SIGINT to xctrace so it flushes and finalizes the .trace file,
+    # but DO NOT wait for it. Finalize can take several seconds for a
+    # long capture, and we want the user's terminal back immediately
+    # so they can re-run. Disown it from the shell's job table so it
+    # survives our exit without a SIGHUP.
     echo
-    echo "==> Stopping profiler and finalizing trace..."
+    echo "==> Stopping profiler; trace will finalize in background (pid ${PROFILE_PID})."
     kill -INT "${PROFILE_PID}" 2>/dev/null || true
-    wait "${PROFILE_PID}" 2>/dev/null || true
+    disown "${PROFILE_PID}" 2>/dev/null || true
   fi
 
   if [[ -n "${CONSOLE_PID}" ]]; then
     kill "${CONSOLE_PID}" 2>/dev/null || true
+    # Console pipe is quick to close — safe to wait briefly.
     wait "${CONSOLE_PID}" 2>/dev/null || true
   fi
 
@@ -478,59 +495,118 @@ if [[ "${PROFILE_ENABLED}" == "1" ]]; then
   echo "    profile log: ${PROFILE_LOG_PATH}"
 fi
 
-echo "==> Launching app and attaching console (Ctrl+C stops console streaming)..."
-xcrun devicectl device process launch --device "${DEVICE_ID}" --terminate-existing \
-  --console --json-output "${LAUNCH_JSON_PATH}" "${BUNDLE_ID}" \
-  2>&1 | tee >(
-    perl -MPOSIX=strftime -ne 'BEGIN { $| = 1 } print strftime("[%Y-%m-%d %H:%M:%S] ", localtime), $_' > "${CONSOLE_LOG_PATH}"
-  ) | perl -MPOSIX=strftime -ne 'BEGIN { $| = 1 } print strftime("[%Y-%m-%d %H:%M:%S] ", localtime), $_' &
-CONSOLE_PID=$!
+if [[ "${PROFILE_ENABLED}" == "1" && "${PROFILE_LAUNCH_MODE}" == "1" ]]; then
+  # Launch-mode: xctrace brings the app up, which enables SwiftUI
+  # signposts. devicectl console streaming is incompatible with this
+  # (xctrace owns the process), so we skip it.
+  echo "==> Launching app under xctrace (${PROFILE_TEMPLATE})..."
+  echo "    Note: device console log is NOT captured in this mode."
+  echo "    Use 'xcrun devicectl device process monitor --device ${DEVICE_ID}' in"
+  echo "    another terminal if you need live logs alongside the trace."
+  RECORD_ARGS=(
+    xcrun xctrace record
+    --template "${PROFILE_TEMPLATE}"
+    --device "${XCTRACE_DEVICE_ID}"
+    --output "${TRACE_PATH}"
+    --no-prompt
+  )
+  if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
+    RECORD_ARGS+=(--time-limit "${PROFILE_TIME_LIMIT}")
+  fi
+  RECORD_ARGS+=(--launch -- "${APP_PATH}")
 
-if [[ "${PROFILE_ENABLED}" == "1" ]]; then
-  PID=""
-  for _ in $(seq 1 50); do
-    PID="$(lookup_running_pid "${RUN_DIR}/processes.json")"
-    if [[ -n "${PID}" ]]; then
-      sleep 0.5
-      latest_pid="$(lookup_running_pid "${RUN_DIR}/processes.json")"
-      if [[ -n "${latest_pid}" ]]; then
-        PID="${latest_pid}"
-      fi
-      break
-    fi
-    sleep 0.2
-  done
-
-  if [[ -n "${PID}" ]]; then
-    RECORD_ARGS=(
-      xcrun xctrace record
-      --template "${PROFILE_TEMPLATE}"
-      --device "${XCTRACE_DEVICE_ID}"
-      --attach "${PID}"
-      --output "${TRACE_PATH}"
-      --no-prompt
-    )
-    if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
-      RECORD_ARGS+=(--time-limit "${PROFILE_TIME_LIMIT}")
-      echo "==> Starting ${PROFILE_TEMPLATE} for pid ${PID} (${PROFILE_TIME_LIMIT})..."
-    else
-      echo "==> Starting ${PROFILE_TEMPLATE} for pid ${PID} for the full run..."
-    fi
-    if start_profiler_with_retry "${PID}" "${RECORD_ARGS[@]}"; then
-      if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
-        echo "==> Profiler will stop automatically when the time limit is reached."
-      else
-        echo "==> Profiler will stop when this run stops and then finalize ${TRACE_PATH}."
-      fi
-    else
-      PROFILE_PID=""
-      echo "WARN: failed to attach profiler after ${PROFILE_ATTACH_RETRY_LIMIT} attempts; see ${PROFILE_LOG_PATH}" >&2
-    fi
+  if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
+    echo "==> xctrace will stop after ${PROFILE_TIME_LIMIT} and finalize ${TRACE_PATH}."
   else
-    echo "WARN: could not resolve ${APP_EXECUTABLE_NAME} pid on device; skipping profiler capture" >&2
+    echo "==> xctrace will record until you Ctrl+C and then finalize ${TRACE_PATH}."
+  fi
+  # Background xctrace so the `cleanup` trap can forward SIGINT to it on
+  # Ctrl+C — the trap reads PROFILE_PID and signals that specific pid so
+  # the trace finalizes cleanly instead of being truncated.
+  "${RECORD_ARGS[@]}" >"${PROFILE_LOG_PATH}" 2>&1 &
+  BG_XCTRACE_PID=$!
+
+  if [[ "${PROFILE_DETACH}" == "1" ]]; then
+    # Detach: disown so the process survives script exit, persist the
+    # pid for later, and drop the trap's reference so `cleanup` doesn't
+    # signal xctrace on our exit path.
+    echo "${BG_XCTRACE_PID}" > "${RUN_DIR}/profile.pid"
+    disown "${BG_XCTRACE_PID}" 2>/dev/null || true
+    PROFILE_PID=""
+    echo ""
+    echo "==> xctrace running in background (pid ${BG_XCTRACE_PID})."
+    echo "    Stop gracefully (trace finalizes):  kill -INT ${BG_XCTRACE_PID}"
+    echo "    Output:                             ${TRACE_PATH}"
+    echo "    Log:                                ${PROFILE_LOG_PATH}"
+    # Still stop the console pipe and tailscale tunnel before exiting.
+    if [[ -n "${CONSOLE_PID}" ]]; then
+      kill "${CONSOLE_PID}" 2>/dev/null || true
+      wait "${CONSOLE_PID}" 2>/dev/null || true
+      CONSOLE_PID=""
+    fi
+    # Clear trap so the EXIT path doesn't try to kill the disowned pid.
+    trap - EXIT INT TERM
+    exit 0
+  else
+    PROFILE_PID="${BG_XCTRACE_PID}"
+    wait "${PROFILE_PID}" 2>/dev/null || true
+    PROFILE_PID=""
   fi
 else
-  echo "==> Profiler disabled (IOS_DEVICE_PROFILE=${PROFILE_ENABLED})."
-fi
+  echo "==> Launching app and attaching console (Ctrl+C stops console streaming)..."
+  xcrun devicectl device process launch --device "${DEVICE_ID}" --terminate-existing \
+    --console --json-output "${LAUNCH_JSON_PATH}" "${BUNDLE_ID}" \
+    2>&1 | tee >(
+      perl -MPOSIX=strftime -ne 'BEGIN { $| = 1 } print strftime("[%Y-%m-%d %H:%M:%S] ", localtime), $_' > "${CONSOLE_LOG_PATH}"
+    ) | perl -MPOSIX=strftime -ne 'BEGIN { $| = 1 } print strftime("[%Y-%m-%d %H:%M:%S] ", localtime), $_' &
+  CONSOLE_PID=$!
 
-wait "${CONSOLE_PID}"
+  if [[ "${PROFILE_ENABLED}" == "1" ]]; then
+    PID=""
+    for _ in $(seq 1 50); do
+      PID="$(lookup_running_pid "${RUN_DIR}/processes.json")"
+      if [[ -n "${PID}" ]]; then
+        sleep 0.5
+        latest_pid="$(lookup_running_pid "${RUN_DIR}/processes.json")"
+        if [[ -n "${latest_pid}" ]]; then
+          PID="${latest_pid}"
+        fi
+        break
+      fi
+      sleep 0.2
+    done
+
+    if [[ -n "${PID}" ]]; then
+      RECORD_ARGS=(
+        xcrun xctrace record
+        --template "${PROFILE_TEMPLATE}"
+        --device "${XCTRACE_DEVICE_ID}"
+        --attach "${PID}"
+        --output "${TRACE_PATH}"
+        --no-prompt
+      )
+      if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
+        RECORD_ARGS+=(--time-limit "${PROFILE_TIME_LIMIT}")
+        echo "==> Starting ${PROFILE_TEMPLATE} for pid ${PID} (${PROFILE_TIME_LIMIT})..."
+      else
+        echo "==> Starting ${PROFILE_TEMPLATE} for pid ${PID} for the full run..."
+      fi
+      if start_profiler_with_retry "${PID}" "${RECORD_ARGS[@]}"; then
+        if [[ -n "${PROFILE_TIME_LIMIT}" ]]; then
+          echo "==> Profiler will stop automatically when the time limit is reached."
+        else
+          echo "==> Profiler will stop when this run stops and then finalize ${TRACE_PATH}."
+        fi
+      else
+        PROFILE_PID=""
+        echo "WARN: failed to attach profiler after ${PROFILE_ATTACH_RETRY_LIMIT} attempts; see ${PROFILE_LOG_PATH}" >&2
+      fi
+    else
+      echo "WARN: could not resolve ${APP_EXECUTABLE_NAME} pid on device; skipping profiler capture" >&2
+    fi
+  else
+    echo "==> Profiler disabled (IOS_DEVICE_PROFILE=${PROFILE_ENABLED})."
+  fi
+
+  wait "${CONSOLE_PID}"
+fi

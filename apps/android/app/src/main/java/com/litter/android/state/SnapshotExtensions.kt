@@ -114,7 +114,16 @@ val AppServerSnapshot.statusColor: Color
         currentConnectionStep?.state == AppConnectionStepState.AWAITING_USER_INPUT -> WarningOrange
         connectionProgressLabel != null -> AccentGreen
         transportState == AppServerTransportState.CONNECTED && !isLocal && account == null -> WarningOrange
-        transportState == AppServerTransportState.CONNECTED && ipcState == AppServerIpcState.DISCONNECTED -> WarningOrange
+        // Only surface IPC-disconnected as "warning orange" when the
+        // experimental IPC feature is enabled — mirrors iOS
+        // `AppServerSnapshot+UI.swift` + the same gate in
+        // `statusDotState` above. Without this, the conversation header
+        // dot stays orange on every remote server that doesn't speak IPC.
+        transportState == AppServerTransportState.CONNECTED &&
+            ipcState == AppServerIpcState.DISCONNECTED &&
+            com.litter.android.ui.ExperimentalFeatures.isEnabled(
+                com.litter.android.ui.LitterFeature.IPC,
+            ) -> WarningOrange
         else -> transportState.accentColor
     }
 

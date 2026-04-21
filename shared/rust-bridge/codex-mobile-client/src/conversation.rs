@@ -13,6 +13,7 @@ use crate::parser::{
     parse_code_review_message,
 };
 use crate::types::{AppMessagePhase, AppOperationStatus, AppSubagentStatus};
+use base64::Engine;
 use codex_app_server_protocol::{
     CollabAgentStatus, CollabAgentTool, CollabAgentToolCallStatus, CommandAction,
     CommandExecutionStatus, DynamicToolCallOutputContentItem, DynamicToolCallStatus,
@@ -20,8 +21,14 @@ use codex_app_server_protocol::{
     ThreadItem, Turn, UserInput,
 };
 use codex_shell_command::parse_command::extract_shell_command;
-use base64::Engine;
 use serde::Serialize;
+
+const MOBILE_COMMAND_TEXT_CAP_BYTES: usize = 4 * 1024;
+const MOBILE_COMMAND_OUTPUT_CAP_BYTES: usize = 128 * 1024;
+const MOBILE_COMMAND_ACTION_FIELD_CAP_BYTES: usize = 1024;
+const MOBILE_COMMAND_ACTION_COUNT_CAP: usize = 32;
+const MOBILE_COMMAND_TEXT_TRUNCATION_SUFFIX: &str = "... [truncated on mobile]";
+const MOBILE_COMMAND_OUTPUT_TRUNCATION_SUFFIX: &str = "\n[output truncated on mobile]\n";
 
 // ---------------------------------------------------------------------------
 // Conversion options
@@ -139,6 +146,58 @@ fn display_command(command: &str) -> String {
     trimmed.to_string()
 }
 
+fn truncate_text_bytes(value: &str, cap: usize, suffix: &str) -> String {
+    if value.len() <= cap {
+        return value.to_string();
+    }
+
+    let suffix_bytes = suffix.len().min(cap);
+    let mut suffix_end = suffix_bytes;
+    while suffix_end > 0 && !suffix.is_char_boundary(suffix_end) {
+        suffix_end -= 1;
+    }
+    let suffix = &suffix[..suffix_end];
+
+    let prefix_cap = cap.saturating_sub(suffix.len());
+    let mut end = prefix_cap.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut truncated = String::with_capacity(end + suffix.len());
+    truncated.push_str(&value[..end]);
+    truncated.push_str(suffix);
+    truncated
+}
+
+pub(crate) fn truncate_command_display_text(value: &str) -> String {
+    truncate_text_bytes(
+        value,
+        MOBILE_COMMAND_TEXT_CAP_BYTES,
+        MOBILE_COMMAND_TEXT_TRUNCATION_SUFFIX,
+    )
+}
+
+pub(crate) fn truncate_command_output_text(value: &str) -> String {
+    truncate_text_bytes(
+        value,
+        MOBILE_COMMAND_OUTPUT_CAP_BYTES,
+        MOBILE_COMMAND_OUTPUT_TRUNCATION_SUFFIX,
+    )
+}
+
+pub(crate) fn command_output_is_truncated(value: &str) -> bool {
+    value.ends_with(MOBILE_COMMAND_OUTPUT_TRUNCATION_SUFFIX)
+}
+
+fn truncate_command_action_field(value: &str) -> String {
+    truncate_text_bytes(
+        value,
+        MOBILE_COMMAND_ACTION_FIELD_CAP_BYTES,
+        MOBILE_COMMAND_TEXT_TRUNCATION_SUFFIX,
+    )
+}
+
 fn extract_cmd_command(command: &[String]) -> Option<&str> {
     let [shell, flag, script] = command else {
         return None;
@@ -228,13 +287,19 @@ fn convert_thread_item(
             process_id,
             ..
         } => {
-            let actions = command_actions.iter().map(convert_command_action).collect();
+            let actions = command_actions
+                .iter()
+                .take(MOBILE_COMMAND_ACTION_COUNT_CAP)
+                .map(convert_command_action)
+                .collect();
             (
                 HydratedConversationItemContent::CommandExecution(HydratedCommandExecutionData {
-                    command: display_command(command),
-                    cwd: cwd.display().to_string(),
+                    command: truncate_command_display_text(&display_command(command)),
+                    cwd: truncate_command_action_field(&cwd.display().to_string()),
                     status: convert_command_status(status),
-                    output: aggregated_output.clone(),
+                    output: aggregated_output
+                        .as_deref()
+                        .map(truncate_command_output_text),
                     exit_code: *exit_code,
                     duration_ms: *duration_ms,
                     process_id: process_id.clone(),
@@ -282,7 +347,11 @@ fn convert_thread_item(
                 .and_then(|r| r.structured_content.as_ref())
                 .and_then(pretty_json);
             let computer_use = if server == "computer-use" {
-                Some(build_computer_use_view(tool, arguments, result.as_ref()))
+                Some(build_computer_use_view(
+                    tool,
+                    arguments,
+                    result.as_ref().map(|r| r.as_ref()),
+                ))
             } else {
                 None
             };
@@ -396,7 +465,7 @@ fn convert_thread_item(
         }
         ThreadItem::ImageView { path, .. } => (
             HydratedConversationItemContent::ImageView(HydratedImageViewData {
-                path: path.clone(),
+                path: path.to_string_lossy().into_owned(),
             }),
             false,
         ),
@@ -408,17 +477,20 @@ fn convert_thread_item(
             ..
         } => {
             let image_png = decode_image_generation_result(result);
+            let saved_path_string = saved_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned());
             let normalized_status = convert_image_generation_status(
                 status,
                 image_png.is_some(),
-                saved_path.as_deref(),
+                saved_path_string.as_deref(),
             );
             (
                 HydratedConversationItemContent::ImageGeneration(HydratedImageGenerationData {
                     status: normalized_status,
                     revised_prompt: revised_prompt.clone(),
                     image_png,
-                    saved_path: saved_path.clone(),
+                    saved_path: saved_path_string,
                 }),
                 false,
             )
@@ -635,9 +707,9 @@ fn convert_command_action(action: &CommandAction) -> HydratedCommandActionData {
             path,
         } => HydratedCommandActionData {
             kind: HydratedCommandActionKind::Read,
-            command: command.clone(),
-            name: Some(name.clone()),
-            path: Some(path.display().to_string()),
+            command: truncate_command_action_field(command),
+            name: Some(truncate_command_action_field(name)),
+            path: Some(truncate_command_action_field(&path.display().to_string())),
             query: None,
         },
         CommandAction::Search {
@@ -646,21 +718,21 @@ fn convert_command_action(action: &CommandAction) -> HydratedCommandActionData {
             path,
         } => HydratedCommandActionData {
             kind: HydratedCommandActionKind::Search,
-            command: command.clone(),
+            command: truncate_command_action_field(command),
             name: None,
-            path: path.clone(),
-            query: query.clone(),
+            path: path.as_deref().map(truncate_command_action_field),
+            query: query.as_deref().map(truncate_command_action_field),
         },
         CommandAction::ListFiles { command, path } => HydratedCommandActionData {
             kind: HydratedCommandActionKind::ListFiles,
-            command: command.clone(),
+            command: truncate_command_action_field(command),
             name: None,
-            path: path.clone(),
+            path: path.as_deref().map(truncate_command_action_field),
             query: None,
         },
         CommandAction::Unknown { command } => HydratedCommandActionData {
             kind: HydratedCommandActionKind::Unknown,
-            command: command.clone(),
+            command: truncate_command_action_field(command),
             name: None,
             path: None,
             query: None,
@@ -880,7 +952,9 @@ fn build_computer_use_view(
     if let Some(r) = result {
         let engine = base64::engine::general_purpose::STANDARD;
         for part in &r.content {
-            let Some(obj) = part.as_object() else { continue };
+            let Some(obj) = part.as_object() else {
+                continue;
+            };
             match obj.get("type").and_then(|v| v.as_str()) {
                 Some("image") => {
                     let mime = obj
@@ -927,13 +1001,17 @@ fn build_computer_use_view(
 }
 
 fn computer_use_summary(tool: &ComputerUseTool) -> String {
-    let short_app = |app: &str| -> String {
-        app.rsplit('.').next().unwrap_or(app).to_string()
-    };
+    let short_app = |app: &str| -> String { app.rsplit('.').next().unwrap_or(app).to_string() };
     match tool {
         ComputerUseTool::ListApps => "List running apps".to_string(),
         ComputerUseTool::GetAppState { app } => format!("Inspect {}", short_app(app)),
-        ComputerUseTool::Click { app, element_index, x, y, .. } => {
+        ComputerUseTool::Click {
+            app,
+            element_index,
+            x,
+            y,
+            ..
+        } => {
             let target = match (element_index.as_deref(), x, y) {
                 (Some(idx), _, _) if !idx.is_empty() => format!("element {}", idx),
                 (_, Some(x), Some(y)) => format!("({:.0}, {:.0})", x, y),
@@ -941,16 +1019,29 @@ fn computer_use_summary(tool: &ComputerUseTool) -> String {
             };
             format!("Click {} in {}", target, short_app(app))
         }
-        ComputerUseTool::PerformSecondaryAction { app, element_index, action } => {
+        ComputerUseTool::PerformSecondaryAction {
+            app,
+            element_index,
+            action,
+        } => {
             let target = element_index.as_deref().unwrap_or("—");
             match action.as_deref() {
                 Some(act) if !act.is_empty() => {
                     format!("{} on element {} in {}", act, target, short_app(app))
                 }
-                _ => format!("Secondary action on element {} in {}", target, short_app(app)),
+                _ => format!(
+                    "Secondary action on element {} in {}",
+                    target,
+                    short_app(app)
+                ),
             }
         }
-        ComputerUseTool::Scroll { app, direction, element_index, pages } => {
+        ComputerUseTool::Scroll {
+            app,
+            direction,
+            element_index,
+            pages,
+        } => {
             let dir = direction.as_deref().unwrap_or("scroll");
             let pages_suffix = pages
                 .filter(|p| (*p - 1.0).abs() > f64::EPSILON)
@@ -958,20 +1049,34 @@ fn computer_use_summary(tool: &ComputerUseTool) -> String {
                 .unwrap_or_default();
             match element_index {
                 Some(idx) if !idx.is_empty() => {
-                    format!("Scroll {} on element {}{} in {}", dir, idx, pages_suffix, short_app(app))
+                    format!(
+                        "Scroll {} on element {}{} in {}",
+                        dir,
+                        idx,
+                        pages_suffix,
+                        short_app(app)
+                    )
                 }
                 _ => format!("Scroll {}{} in {}", dir, pages_suffix, short_app(app)),
             }
         }
-        ComputerUseTool::Drag { app, from_x, from_y, to_x, to_y } => {
-            match (from_x, from_y, to_x, to_y) {
-                (Some(fx), Some(fy), Some(tx), Some(ty)) => format!(
-                    "Drag ({:.0}, {:.0}) → ({:.0}, {:.0}) in {}",
-                    fx, fy, tx, ty, short_app(app)
-                ),
-                _ => format!("Drag in {}", short_app(app)),
-            }
-        }
+        ComputerUseTool::Drag {
+            app,
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+        } => match (from_x, from_y, to_x, to_y) {
+            (Some(fx), Some(fy), Some(tx), Some(ty)) => format!(
+                "Drag ({:.0}, {:.0}) → ({:.0}, {:.0}) in {}",
+                fx,
+                fy,
+                tx,
+                ty,
+                short_app(app)
+            ),
+            _ => format!("Drag in {}", short_app(app)),
+        },
         ComputerUseTool::TypeText { app, text } => {
             let snippet = if text.chars().count() > 48 {
                 let head: String = text.chars().take(48).collect();
@@ -984,7 +1089,11 @@ fn computer_use_summary(tool: &ComputerUseTool) -> String {
         ComputerUseTool::PressKey { app, key } => {
             format!("Press {} in {}", key, short_app(app))
         }
-        ComputerUseTool::SetValue { app, element_index, value } => {
+        ComputerUseTool::SetValue {
+            app,
+            element_index,
+            value,
+        } => {
             let target = element_index.as_deref().unwrap_or("—");
             let v_snippet = value.as_deref().map(|v| {
                 if v.chars().count() > 32 {
@@ -1498,7 +1607,10 @@ diff --git a/parser.rs b/parser.rs\n\
             panic!("expected McpToolCall");
         };
         let view = data.computer_use.as_ref().expect("computer_use view");
-        let ComputerUseTool::Click { app, element_index, .. } = &view.tool else {
+        let ComputerUseTool::Click {
+            app, element_index, ..
+        } = &view.tool
+        else {
             panic!("expected Click, got {:?}", view.tool);
         };
         assert_eq!(app, "com.google.Chrome");
@@ -1506,7 +1618,12 @@ diff --git a/parser.rs b/parser.rs\n\
         let png = view.screenshot_png.as_ref().expect("png bytes");
         // PNG magic header: 89 50 4E 47 0D 0A 1A 0A
         assert_eq!(&png[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        assert!(view.accessibility_text.as_deref().unwrap().starts_with("App=com.google.Chrome"));
+        assert!(
+            view.accessibility_text
+                .as_deref()
+                .unwrap()
+                .starts_with("App=com.google.Chrome")
+        );
         assert!(view.summary.contains("634"));
         assert!(view.summary.contains("Chrome"));
 
@@ -1520,8 +1637,7 @@ diff --git a/parser.rs b/parser.rs\n\
     fn test_image_generation_hydrates_typed_variant() {
         // A 1x1 transparent PNG (89 50 4E 47 ...) as base64, used here to
         // exercise the decode path end-to-end.
-        let png_base64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
         let turns = vec![make_turn(
             "t-imagegen",
             vec![
@@ -1560,7 +1676,10 @@ diff --git a/parser.rs b/parser.rs\n\
             panic!("expected ImageGeneration");
         };
         assert_eq!(done.status, AppOperationStatus::Completed);
-        assert_eq!(done.revised_prompt.as_deref(), Some("a grumpy pirate kitty"));
+        assert_eq!(
+            done.revised_prompt.as_deref(),
+            Some("a grumpy pirate kitty")
+        );
         assert_eq!(done.saved_path.as_deref(), Some("/tmp/ig-1.png"));
         let png = done.image_png.as_ref().expect("decoded png bytes");
         assert_eq!(&png[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
@@ -1577,5 +1696,47 @@ diff --git a/parser.rs b/parser.rs\n\
         };
         assert_eq!(lying.status, AppOperationStatus::Completed);
         assert!(lying.image_png.is_some());
+    }
+
+    #[test]
+    fn test_command_hydration_truncates_large_mobile_fields() {
+        let long_command = format!("/bin/sh -lc '{}'", "x".repeat(6000));
+        let long_output = "y".repeat(140 * 1024);
+        let long_query = "needle".repeat(300);
+        let turns = vec![make_turn(
+            "t-command-truncate",
+            vec![ThreadItem::CommandExecution {
+                id: "cmd-1".into(),
+                command: long_command,
+                cwd: PathBuf::from("/tmp"),
+                status: CommandExecutionStatus::Completed,
+                command_actions: vec![CommandAction::Search {
+                    command: "find . -name '*.swift'".into(),
+                    query: Some(long_query),
+                    path: Some(".".into()),
+                }],
+                aggregated_output: Some(long_output),
+                exit_code: Some(0),
+                duration_ms: Some(10),
+                process_id: Some("123".into()),
+            }],
+        )];
+
+        let items = hydrate_turns(&turns, &HydrationOptions::default());
+        let HydratedConversationItemContent::CommandExecution(data) = &items[0].content else {
+            panic!("expected CommandExecution");
+        };
+        assert!(data.command.len() <= MOBILE_COMMAND_TEXT_CAP_BYTES);
+        assert!(data.command.contains("[truncated on mobile]"));
+        assert!(data.output.as_ref().is_some_and(|value| {
+            value.len() <= MOBILE_COMMAND_OUTPUT_CAP_BYTES
+                && value.contains("[output truncated on mobile]")
+        }));
+        assert!(
+            data.actions[0]
+                .query
+                .as_ref()
+                .is_some_and(|value| value.contains("[truncated on mobile]"))
+        );
     }
 }

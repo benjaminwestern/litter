@@ -24,8 +24,9 @@ import kotlin.math.roundToLong
 /**
  * Renders a compact stopwatch chip showing the elapsed time of a turn.
  *
- * Times are seconds since the unix epoch (`HydratedConversationItem.timestamp`
- * uses `Double` seconds — [TurnBounds] carries the same shape).
+ * Times are seconds since the unix epoch. Callers convert from
+ * `AppSessionSummary.lastTurnStartMs` / `lastTurnEndMs` (precomputed by the
+ * Rust reducer) at the call site.
  *
  * - When [endSeconds] is null, the chip ticks every second off the current
  *   wall clock.

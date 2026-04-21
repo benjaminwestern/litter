@@ -43,7 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.litter.android.state.displayTitle
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.codex_mobile_client.AppSessionSummary
@@ -90,7 +92,7 @@ fun QuickReplySheet(
             Text(
                 text = thread.displayTitle,
                 color = LitterTheme.textPrimary,
-                fontSize = 14.sp,
+                fontSize = LitterTextStyle.body.scaled,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
             )
@@ -102,7 +104,7 @@ fun QuickReplySheet(
                     append(HomeDashboardSupport.workspaceLabel(thread.cwd))
                 },
                 color = LitterTheme.textMuted,
-                fontSize = 11.sp,
+                fontSize = LitterTextStyle.caption2.scaled,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
             )
@@ -149,7 +151,7 @@ fun QuickReplySheet(
                 Text(
                     text = message,
                     color = LitterTheme.danger,
-                    fontSize = 11.sp,
+                    fontSize = LitterTextStyle.caption2.scaled,
                 )
             }
 

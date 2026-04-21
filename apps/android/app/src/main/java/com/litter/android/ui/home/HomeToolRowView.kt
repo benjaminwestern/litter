@@ -21,26 +21,23 @@ import androidx.compose.ui.unit.dp
 import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.scaled
+import uniffi.codex_mobile_client.AppToolLogEntry
 
 /**
  * Single tool-log row rendered inside the home session card. Used at zoom 3+.
  *
- * Leading icon slot is pinned to a minimum width so adjacent rows stack
- * with aligned detail text. Text glyphs (`$`, `✎`, `·`, `⌕`) render as-is;
- * the two non-glyph markers (`mcp`, `tool`) become Material outlined icons.
+ * Takes a Rust-derived [AppToolLogEntry] directly; the `tool` field is a
+ * short category name (`"Bash"`, `"Edit"`, `"MCP"`, `"Tool"`, `"Explore"`,
+ * `"WebSearch"`) and the `detail` is the rolled-up label (for `"Explore"`
+ * it's the exploration summary, e.g. `"Explored 3 files"`).
  *
- * Ref: HomeDashboardView.swift:898-935 (`toolRowView`, `toolIconView`).
+ * Ref: HomeDashboardView.swift (`toolRowView`, `toolIconView`).
  */
 @Composable
 fun HomeToolRowView(
-    row: HomeToolRow,
+    entry: AppToolLogEntry,
     modifier: Modifier = Modifier,
 ) {
-    val (icon, detail) = when (row) {
-        is HomeToolRow.Exploration -> "⌕" to row.summary
-        is HomeToolRow.Tool -> row.icon to row.detail
-    }
-
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -50,10 +47,10 @@ fun HomeToolRowView(
             modifier = Modifier.widthIn(min = 20.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            ToolIcon(icon)
+            ToolIcon(tool = entry.tool)
         }
         Text(
-            text = detail,
+            text = entry.detail,
             color = LitterTheme.textSecondary.copy(alpha = 0.8f),
             fontSize = LitterTextStyle.body.scaled,
             maxLines = 1,
@@ -63,27 +60,35 @@ fun HomeToolRowView(
 }
 
 @Composable
-private fun ToolIcon(icon: String) {
+private fun ToolIcon(tool: String) {
     val tint = LitterTheme.accent.copy(alpha = 0.6f)
-    when (icon) {
-        "mcp" -> Icon(
+    when (tool) {
+        "MCP" -> Icon(
             imageVector = Icons.Outlined.Computer,
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(12.dp),
         )
-        "tool" -> Icon(
+        "Tool" -> Icon(
             imageVector = Icons.Outlined.Build,
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(12.dp),
         )
-        else -> Text(
-            text = icon,
-            color = tint,
-            fontSize = 12f.scaled,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.defaultMinSize(minWidth = 12.dp),
-        )
+        else -> {
+            val glyph = when (tool) {
+                "Bash" -> "$"
+                "Edit" -> "✎"
+                "Explore", "WebSearch" -> "⌕"
+                else -> tool.take(1).uppercase()
+            }
+            Text(
+                text = glyph,
+                color = tint,
+                fontSize = 12f.scaled,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.defaultMinSize(minWidth = 12.dp),
+            )
+        }
     }
 }

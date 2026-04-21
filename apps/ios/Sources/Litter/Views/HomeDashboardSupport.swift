@@ -15,10 +15,31 @@ struct HomeDashboardRecentSession: Identifiable, Hashable {
     let isSubagent: Bool
     let isFork: Bool
     let lastResponsePreview: String?
+    /// `source_turn_id` of the assistant item behind
+    /// `lastResponsePreview`. Used as the crossfade key in
+    /// `HomeDashboardView.responsePreview` so the text only re-animates when
+    /// a new assistant reply arrives, not when the user submits a new
+    /// prompt (which bumps `stats.turnCount` before any assistant text
+    /// exists).
+    let lastResponseTurnId: String?
     let lastUserMessage: String?
     let lastToolLabel: String?
     let stats: AppConversationStats?
     let tokenUsage: AppTokenUsage?
+    /// Tool activity log precomputed by the Rust reducer in
+    /// `extract_conversation_activity` (shared/rust-bridge/.../boundary.rs).
+    /// The iOS home card used to redo this walk client-side — that was the
+    /// dominant AttributeGraph subscription during streaming. Using the
+    /// Rust-side log removes every `appModel.snapshot` read from the card
+    /// at zoom 1–3.
+    let recentToolLog: [AppToolLogEntry]
+    /// Bounds of the most recent turn. Rust emits these in milliseconds
+    /// since epoch alongside `recent_tool_log`; we project into `Date` so
+    /// the zoom-4 stopwatch chip can render durations without reading
+    /// `appModel.snapshot`. `end` is `nil` when the turn is still active
+    /// — the chip then drives its own live ticker.
+    let lastTurnStart: Date?
+    let lastTurnEnd: Date?
 
     var id: ThreadKey { key }
 }
@@ -65,8 +86,6 @@ struct HomeDashboardServer: Identifiable, Equatable {
 
 @MainActor
 enum HomeDashboardSupport {
-    /// Pass `limit: nil` to return every session across connected servers
-    /// (used by the thread-search view). Default is the home task list cap.
     static func recentConnectedSessions(
         from sessions: [AppSessionSummary],
         serversById: [String: HomeDashboardServer],
@@ -91,10 +110,16 @@ enum HomeDashboardSupport {
                     isSubagent: session.isSubagent,
                     isFork: session.isFork,
                     lastResponsePreview: session.lastResponsePreview,
+                    lastResponseTurnId: session.lastResponseTurnId,
                     lastUserMessage: session.lastUserMessage,
                     lastToolLabel: session.lastToolLabel,
                     stats: session.stats,
-                    tokenUsage: session.tokenUsage
+                    tokenUsage: session.tokenUsage,
+                    recentToolLog: session.recentToolLog,
+                    lastTurnStart: session.lastTurnStartMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000.0) },
+                    lastTurnEnd: session.hasActiveTurn
+                        ? nil
+                        : session.lastTurnEndMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000.0) }
                 )
             }
         if let limit { return Array(sorted.prefix(limit)) }

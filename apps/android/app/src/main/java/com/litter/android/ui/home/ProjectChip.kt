@@ -21,7 +21,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppProject
 import uniffi.codex_mobile_client.projectDefaultLabel
 
@@ -39,7 +41,8 @@ fun ProjectChip(
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .border(0.8.dp, LitterTheme.textMuted.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+            .background(LitterTheme.surface.copy(alpha = 0.9f))
+            .border(0.8.dp, LitterTheme.textMuted.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
             .clickable(enabled = !disabled, onClick = onTap)
             .padding(horizontal = 10.dp, vertical = 5.dp)
             .alpha(if (disabled) 0.5f else 1f),
@@ -55,7 +58,7 @@ fun ProjectChip(
         Text(
             text = label,
             color = if (project != null) LitterTheme.textPrimary else LitterTheme.textSecondary,
-            fontSize = 12.sp,
+            fontSize = LitterTextStyle.caption.scaled,
             fontWeight = FontWeight.Medium,
             fontFamily = LitterTheme.monoFont,
             maxLines = 1,

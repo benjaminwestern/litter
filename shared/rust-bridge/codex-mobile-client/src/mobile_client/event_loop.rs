@@ -127,10 +127,21 @@ impl MobileClient {
         mut health_rx: tokio::sync::watch::Receiver<crate::session::connection::ConnectionHealth>,
     ) {
         let processor = Arc::clone(&self.event_processor);
+        let sessions = Arc::clone(&self.sessions);
+        let app_store = Arc::clone(&self.app_store);
         Self::spawn_detached(async move {
             processor.emit_connection_state(&server_id, "connecting");
+            // Initialize as if previously Connected so the first observation —
+            // which after a successful connect_* call is normally Connected —
+            // does not double-fire alongside spawn_post_connect_warmup. A real
+            // disconnect/reconnect cycle still triggers the transition below.
+            let mut prev_connected: bool = true;
             loop {
                 let health = health_rx.borrow().clone();
+                let is_connected = matches!(
+                    health,
+                    crate::session::connection::ConnectionHealth::Connected
+                );
                 let health_wire = match health {
                     crate::session::connection::ConnectionHealth::Disconnected => "disconnected",
                     crate::session::connection::ConnectionHealth::Connecting { .. } => "connecting",
@@ -140,6 +151,23 @@ impl MobileClient {
                     }
                 };
                 processor.emit_connection_state(&server_id, health_wire);
+
+                if !prev_connected && is_connected {
+                    let session = sessions
+                        .read()
+                        .ok()
+                        .and_then(|guard| guard.get(&server_id).cloned());
+                    if let Some(session) = session {
+                        run_connect_warmup(
+                            Arc::clone(&sessions),
+                            Arc::clone(&app_store),
+                            server_id.clone(),
+                            session,
+                            "reconnect",
+                        );
+                    }
+                }
+                prev_connected = is_connected;
 
                 if health_rx.changed().await.is_err() {
                     break;
@@ -718,6 +746,11 @@ fn handle_bridge_output(
                         let mut snapshot = projection.snapshot;
                         if let Some(existing) = app_store.snapshot().threads.get(&key) {
                             copy_thread_runtime_fields(existing, &mut snapshot);
+                            reconcile_active_turn(
+                                Some(existing),
+                                &mut snapshot,
+                                &proj.thread.turns,
+                            );
                         }
                         app_store.upsert_thread_snapshot(snapshot);
                         sync_ipc_thread_requests_from_projection(

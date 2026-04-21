@@ -17,7 +17,7 @@
         android:label="Litter"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+        android:theme="@style/Theme.App.Starting">
         <meta-data
             android:name="com.litter.android.runtime.STARTUP_MODE"
             android:value="${runtimeStartupMode}" />

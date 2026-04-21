@@ -16,16 +16,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,14 +34,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.litter.android.state.displayTitle
 import com.litter.android.ui.LitterTheme
-import com.litter.android.ui.LocalAppModel
 import com.litter.android.ui.common.FormattedText
 import com.litter.android.ui.common.StatusDot
 import com.litter.android.ui.common.StatusDotState
 import com.litter.android.ui.scaled
 import com.litter.android.ui.LitterTextStyle
+import uniffi.codex_mobile_client.AppOperationStatus
 import uniffi.codex_mobile_client.AppSessionSummary
-import uniffi.codex_mobile_client.HydratedConversationItem
+import uniffi.codex_mobile_client.AppToolLogEntry
 
 /**
  * Zoom-aware session card, replacing the flat `SessionCard` used previously
@@ -73,14 +69,19 @@ fun SessionCanvasRow(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val appModel = LocalAppModel.current
-    val threadSnapshot = remember(session.key, zoomLevel) {
-        appModel.threadSnapshot(session.key)
-    }
-    val hydratedItems: List<HydratedConversationItem> =
-        threadSnapshot?.hydratedConversationItems.orEmpty()
+    // Rust's reducer already derives every field this card displays — last
+    // response text, recent tool log, last-turn bounds — into `session`.
+    // Reading `appModel.threadSnapshot(session.key)` here used to create a
+    // per-card subscription to the global snapshot observable; every
+    // streaming-delta bumped that observable and re-invalidated all cards
+    // even though most had nothing to redraw. Using only `session` props
+    // keeps the card's AttributeGraph footprint at one edge per row.
     val isActive = session.hasActiveTurn
-    val toolRunning = remember(hydratedItems) { isToolCallRunning(hydratedItems) }
+    val toolRunning = remember(session.recentToolLog) {
+        session.recentToolLog.lastOrNull()?.status?.let { status ->
+            status == "inprogress" || status == "pending"
+        } ?: false
+    }
 
     val dotState = when {
         isActive -> StatusDotState.ACTIVE
@@ -97,6 +98,15 @@ fun SessionCanvasRow(
         )
     }
 
+    // Vertical padding per zoom matches iOS `[3, 6, 10, 12][zoomLevel-1]`
+    // (HomeDashboardView.swift:661). Horizontal kept at 14dp to match iOS.
+    val rowVerticalPadding = when (zoomLevel) {
+        1 -> 3.dp
+        2 -> 6.dp
+        3 -> 10.dp
+        else -> 12.dp
+    }
+
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
@@ -105,14 +115,34 @@ fun SessionCanvasRow(
                     onClick = onClick,
                     onLongClick = { showMenu = true },
                 )
-                .padding(horizontal = 4.dp, vertical = 6.dp),
+                .padding(horizontal = 14.dp, vertical = rowVerticalPadding),
             verticalAlignment = Alignment.Top,
         ) {
-            StatusDot(
-                state = dotState,
-                size = 8.dp,
-                modifier = Modifier.padding(top = if (zoomLevel == 1) 2.dp else 4.dp),
-            )
+            // Mirrors iOS `HomeDashboardView.swift:602-604`:
+            //   .frame(width: markerWidth (14), height: 16)
+            //   .padding(.top, zoomLevel == 1 ? 0 : 2)
+            // 10pt dot centered in a 14×16 slot with a 2pt top nudge puts
+            // the dot center at y≈10 from the row top, which lines up with
+            // the midline of the title's first line (17pt body, line
+            // height ≈20pt). At zoom 1 (pad=0) the dot sits ~2pt higher to
+            // match iOS's slightly terser compact layout.
+            // Top offset is larger than iOS's 2pt because Compose `Text`
+            // applies `includeFontPadding = true` by default, which shifts
+            // the visible glyphs down inside the line box. Tuned so the
+            // dot center lines up with the cap-height midline of the
+            // 17.dp body-size title at zoom ≥ 2.
+            Box(
+                modifier = Modifier
+                    .padding(top = if (zoomLevel == 1) 2.dp else 5.dp)
+                    .width(14.dp)
+                    .height(16.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                StatusDot(
+                    state = dotState,
+                    size = 10.dp,
+                )
+            }
             Spacer(Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
@@ -124,8 +154,11 @@ fun SessionCanvasRow(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
+                // MetaLine is shown ONLY at zoom 2 (iOS `if zoomLevel == 2`).
+                // At zoom 3+, modelBadgeLine replaces it with the richer,
+                // single-line model/time/server row.
                 AnimatedVisibility(
-                    visible = zoomLevel >= 2,
+                    visible = zoomLevel == 2,
                     enter = fadeIn(tween(200)) + expandVertically(animationSpec = layerSpring),
                     exit = fadeOut(tween(120)) + shrinkVertically(animationSpec = layerSpring),
                 ) {
@@ -144,21 +177,23 @@ fun SessionCanvasRow(
                     Column {
                         ModelBadgeLine(
                             session = session,
-                            items = hydratedItems,
                             isActive = isActive,
                         )
                         RecentUserMessageLine(session = session)
                         ToolLogColumn(
-                            items = hydratedItems,
+                            entries = session.recentToolLog,
                             maxEntries = if (zoomLevel >= 4) 3 else 1,
                         )
-                        val assistant = remember(hydratedItems) {
-                            displayedAssistantMessage(hydratedItems)
-                        }
-                        val fallback = session.lastResponsePreview?.trim().orEmpty()
-                        val text = assistant?.text?.takeIf { it.trim().isNotEmpty() } ?: fallback
-                        val blockId = assistant?.id ?: "fallback"
-                        if (text.trim().isNotEmpty()) {
+                        val text = session.lastResponsePreview?.trim().orEmpty()
+                        // Key on the assistant message's source_turn_id so
+                        // the crossfade only fires when a new assistant
+                        // reply arrives. Keying on `stats.turnCount` would
+                        // bump the id the moment the user submits a new
+                        // prompt — before any new assistant text — so the
+                        // preview would fade out (and back in with the
+                        // same prior text) on every send.
+                        val blockId = session.lastResponseTurnId ?: "empty"
+                        if (text.isNotEmpty()) {
                             ResponsePreview(
                                 text = text,
                                 blockId = blockId,
@@ -167,31 +202,40 @@ fun SessionCanvasRow(
                         }
                     }
                 }
+
+                // Working directory line at zoom 4 only, matches iOS
+                // HomeDashboardView.swift:645-652.
+                AnimatedVisibility(
+                    visible = zoomLevel >= 4 && !session.cwd.isNullOrBlank(),
+                    enter = fadeIn(tween(200)) + expandVertically(animationSpec = layerSpring),
+                    exit = fadeOut(tween(120)) + shrinkVertically(animationSpec = layerSpring),
+                ) {
+                    Text(
+                        text = session.cwd.orEmpty(),
+                        color = LitterTheme.textMuted.copy(alpha = 0.7f),
+                        fontFamily = LitterTheme.monoFont,
+                        fontSize = 10f.scaled,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
 
-            Box {
-                IconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier.size(28.dp),
-                ) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Session actions",
-                        tint = LitterTheme.textSecondary,
-                    )
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        },
-                    )
-                }
+            // Long-press on the row opens the action menu — replaces the
+            // former 3-dot IconButton. Menu is anchored here so it pops
+            // near the trailing edge.
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = {
+                        showMenu = false
+                        onDelete()
+                    },
+                )
             }
         }
     }
@@ -209,59 +253,75 @@ private fun MetaLine(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (showActivity) {
-            Text(
-                text = "running tool…",
-                color = LitterTheme.accent,
-                fontFamily = LitterTheme.monoFont,
-                fontSize = META_FONT_SP.scaled,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        } else {
-            val relative = HomeDashboardSupport.relativeTime(session.updatedAt)
-            if (relative.isNotEmpty()) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (showActivity) {
                 Text(
-                    text = relative,
-                    color = LitterTheme.textMuted,
-                    fontFamily = LitterTheme.monoFont,
-                    fontSize = META_FONT_SP.scaled,
-                )
-            }
-            Text(
-                text = session.serverDisplayName,
-                color = LitterTheme.textSecondary,
-                fontFamily = LitterTheme.monoFont,
-                fontSize = META_FONT_SP.scaled,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = HomeDashboardSupport.workspaceLabel(session.cwd),
-                color = LitterTheme.textMuted,
-                fontFamily = LitterTheme.monoFont,
-                fontSize = META_FONT_SP.scaled,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (isActive) {
-                Text(
-                    text = "thinking",
+                    text = "running tool…",
                     color = LitterTheme.accent,
                     fontFamily = LitterTheme.monoFont,
                     fontSize = META_FONT_SP.scaled,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+            } else {
+                val relative = HomeDashboardSupport.relativeTime(session.updatedAt)
+                if (relative.isNotEmpty()) {
+                    Text(
+                        text = relative,
+                        color = LitterTheme.textMuted,
+                        fontFamily = LitterTheme.monoFont,
+                        fontSize = META_FONT_SP.scaled,
+                    )
+                }
+                Text(
+                    text = session.serverDisplayName,
+                    color = LitterTheme.textSecondary,
+                    fontFamily = LitterTheme.monoFont,
+                    fontSize = META_FONT_SP.scaled,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = HomeDashboardSupport.workspaceLabel(session.cwd),
+                    color = LitterTheme.textMuted,
+                    fontFamily = LitterTheme.monoFont,
+                    fontSize = META_FONT_SP.scaled,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (isActive) {
+                    Text(
+                        text = "thinking",
+                        color = LitterTheme.accent,
+                        fontFamily = LitterTheme.monoFont,
+                        fontSize = META_FONT_SP.scaled,
+                    )
+                }
             }
         }
+
+        // Inline stat chips on the trailing edge of the meta line. iOS
+        // HomeDashboardView.swift:713,722-749 renders these at zoom 2.
+        InlineStats(
+            session = session,
+            isActive = isActive,
+        )
     }
 }
 
 @Composable
 private fun ToolLogColumn(
-    items: List<HydratedConversationItem>,
+    entries: List<AppToolLogEntry>,
     maxEntries: Int,
 ) {
-    val rows = remember(items, maxEntries) { hydratedToolRows(items, maxEntries) }
+    // Rust-side `recent_tool_log` is newest-last; take the tail to mirror the
+    // old `hydratedToolRows` behavior. Replaces a per-card iteration over
+    // hydrated items.
+    val rows = remember(entries, maxEntries) { entries.takeLast(maxEntries) }
     if (rows.isEmpty()) return
     Column(
         modifier = Modifier
@@ -269,8 +329,8 @@ private fun ToolLogColumn(
             .padding(top = 6.dp, bottom = 2.dp),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        rows.forEach { row ->
-            HomeToolRowView(row = row)
+        rows.forEach { entry ->
+            HomeToolRowView(entry = entry)
         }
     }
 }

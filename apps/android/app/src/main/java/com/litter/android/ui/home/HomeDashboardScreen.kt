@@ -87,8 +87,10 @@ import com.litter.android.state.statusColor
 import com.litter.android.state.statusLabel
 import com.litter.android.ui.ExperimentalFeatures
 import com.litter.android.ui.LitterFeature
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.LocalAppModel
+import com.litter.android.ui.scaled
 import kotlinx.coroutines.launch
 import uniffi.codex_mobile_client.AppProject
 import uniffi.codex_mobile_client.AppServerSnapshot
@@ -152,6 +154,12 @@ fun HomeDashboardScreen(
 
     var confirmAction by remember { mutableStateOf<ConfirmAction?>(null) }
     var isComposerActive by remember { mutableStateOf(false) }
+    // When the user taps a composer chip (model / project), a modal sheet
+    // opens and the IME dismisses — which would otherwise cascade through
+    // `HomeComposerBar.onActiveChange(false)` and collapse the composer
+    // back to the `+` button. This flag lets us suppress collapse while a
+    // chip sheet is likely mid-interaction.
+    var suppressComposerCollapse by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val requestedHydrationKeys = remember { mutableSetOf<String>() }
@@ -233,16 +241,16 @@ fun HomeDashboardScreen(
                         }
                     }
                 },
-            verticalArrangement = Arrangement.spacedBy(6.dp),
             contentPadding = run {
                 // Respect system bars so list content can scroll under the
                 // translucent top/bottom chrome *and* past the status/nav bar
-                // insets (edge-to-edge). Extra fixed dp covers the chrome
-                // itself so the first/last items aren't hidden behind it.
+                // insets (edge-to-edge). The fixed dp offsets cover the
+                // floating chrome (server pills on top, composer buttons on
+                // bottom) so the first/last items aren't hidden behind them.
                 val sysInsets = WindowInsets.systemBars.asPaddingValues()
                 androidx.compose.foundation.layout.PaddingValues(
-                    top = 120.dp + sysInsets.calculateTopPadding(),
-                    bottom = 120.dp + sysInsets.calculateBottomPadding(),
+                    top = 72.dp + sysInsets.calculateTopPadding(),
+                    bottom = 72.dp + sysInsets.calculateBottomPadding(),
                 )
             },
         ) {
@@ -275,9 +283,7 @@ fun HomeDashboardScreen(
                         onError = { msg ->
                             confirmAction = ConfirmAction.ReplyError(msg)
                         },
-                        modifier = Modifier
-                            .padding(horizontal = 16.dp)
-                            .animateItem(),
+                        modifier = Modifier.animateItem(),
                     ) {
                         SessionCanvasRow(
                             session = session,
@@ -305,7 +311,7 @@ fun HomeDashboardScreen(
                         Text(
                             text = "No sessions yet",
                             color = LitterTheme.textSecondary,
-                            fontSize = 14.sp,
+                            fontSize = LitterTextStyle.body.scaled,
                             fontWeight = FontWeight.Medium,
                         )
                         Text(
@@ -314,7 +320,7 @@ fun HomeDashboardScreen(
                             else
                                 "Pick a project and send a message to start one.",
                             color = LitterTheme.textMuted,
-                            fontSize = 12.sp,
+                            fontSize = LitterTextStyle.caption.scaled,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         )
                     }
@@ -562,27 +568,66 @@ fun HomeDashboardScreen(
                     // there isn't a duplicate search bar at the bottom.
                     isSearchExpanded -> {}
                     isComposerActive -> {
+                        // Model + project chips sit above the composer input,
+                        // mirroring iOS `HomeDashboardView.swift:273-288`. The
+                        // model chip opens a bottom sheet with model/effort
+                        // selection; the project chip opens the project
+                        // picker.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 14.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.End,
+                            horizontalArrangement = Arrangement.spacedBy(
+                                8.dp,
+                                Alignment.End,
+                            ),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            val serverForModels = selectedProject?.serverId
+                                ?: selectedServerId
+                            HomeModelChip(
+                                serverId = serverForModels,
+                                disabled = serverForModels.isNullOrBlank(),
+                                onSheetStateChange = { open ->
+                                    suppressComposerCollapse = open
+                                },
+                            )
                             ProjectChip(
                                 project = selectedProject,
                                 disabled = servers.isEmpty(),
-                                onTap = onOpenProjectPicker,
+                                onTap = {
+                                    // Hold the composer open through the
+                                    // project-picker navigation so the user
+                                    // returns to an expanded composer. The
+                                    // flag self-resets after a short delay.
+                                    suppressComposerCollapse = true
+                                    onOpenProjectPicker()
+                                },
                             )
+                        }
+                        // Drop the collapse suppression a moment after the
+                        // last chip interaction, once any transient focus
+                        // churn has settled.
+                        LaunchedEffect(suppressComposerCollapse) {
+                            if (suppressComposerCollapse) {
+                                kotlinx.coroutines.delay(1500)
+                                suppressComposerCollapse = false
+                            }
                         }
                         HomeComposerBar(
                             project = selectedProject,
                             onThreadCreated = onThreadCreated,
-                            onActiveChange = { active -> isComposerActive = active },
+                            onActiveChange = { active ->
+                                if (active) {
+                                    isComposerActive = true
+                                } else if (!suppressComposerCollapse) {
+                                    isComposerActive = false
+                                }
+                            },
                         )
                     }
                     else -> {
-                        // Collapsed: two icon pills, search on left of plus.
+                        // Collapsed: two icon pills, + on the left, search on the right.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -593,22 +638,6 @@ fun HomeDashboardScreen(
                             ),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            androidx.compose.material3.IconButton(
-                                onClick = { isSearchExpanded = true },
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(
-                                        LitterTheme.surface.copy(alpha = 0.9f),
-                                        CircleShape,
-                                    ),
-                            ) {
-                                Icon(
-                                    imageVector = androidx.compose.material.icons.Icons.Outlined.Search,
-                                    contentDescription = "Search threads",
-                                    tint = LitterTheme.textSecondary,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
                             androidx.compose.material3.IconButton(
                                 onClick = { isComposerActive = true },
                                 modifier = Modifier
@@ -623,6 +652,22 @@ fun HomeDashboardScreen(
                                     contentDescription = "New message",
                                     tint = LitterTheme.textPrimary,
                                     modifier = Modifier.size(22.dp),
+                                )
+                            }
+                            androidx.compose.material3.IconButton(
+                                onClick = { isSearchExpanded = true },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(
+                                        LitterTheme.surface.copy(alpha = 0.9f),
+                                        CircleShape,
+                                    ),
+                            ) {
+                                Icon(
+                                    imageVector = androidx.compose.material.icons.Icons.Outlined.Search,
+                                    contentDescription = "Search threads",
+                                    tint = LitterTheme.textSecondary,
+                                    modifier = Modifier.size(20.dp),
                                 )
                             }
                         }

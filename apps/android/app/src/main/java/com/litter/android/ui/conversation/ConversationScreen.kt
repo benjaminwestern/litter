@@ -73,6 +73,7 @@ import com.litter.android.ui.ConversationPrefs
 import com.litter.android.ui.LocalAppModel
 import com.litter.android.ui.LitterTheme
 import com.litter.android.ui.LitterTextStyle
+import com.litter.android.ui.scaled
 import com.litter.android.ui.WallpaperManager
 import com.litter.android.ui.WallpaperType
 import com.litter.android.ui.isNearListBottom
@@ -435,7 +436,7 @@ fun ConversationScreen(
                                     Text(
                                         "Loading conversation…",
                                         color = LitterTheme.textMuted,
-                                        fontSize = 12.sp,
+                                        fontSize = LitterTextStyle.caption.scaled,
                                     )
                                 }
                             }
@@ -452,7 +453,7 @@ fun ConversationScreen(
                                     Text(
                                         "Load earlier messages",
                                         color = LitterTheme.accent,
-                                        fontSize = 12.sp,
+                                        fontSize = LitterTextStyle.caption.scaled,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 }
@@ -562,7 +563,7 @@ fun ConversationScreen(
                                         Text(
                                             text = metricsText,
                                             color = LitterTheme.textMuted.copy(alpha = 0.6f),
-                                            fontSize = 10.sp,
+                                            fontSize = 10f.scaled,
                                             fontFamily = com.litter.android.ui.BerkeleyMono,
                                             modifier = Modifier.padding(top = 2.dp, start = 4.dp),
                                         )
@@ -576,7 +577,7 @@ fun ConversationScreen(
                                         Text(
                                             text = "Show less",
                                             color = LitterTheme.textMuted,
-                                            fontSize = 11.sp,
+                                            fontSize = LitterTextStyle.caption2.scaled,
                                             fontWeight = FontWeight.Medium,
                                             modifier = Modifier
                                                 .clickable {
@@ -958,7 +959,7 @@ private fun CollaborationModeSheet(
             Text(
                 text = "Collaboration Mode",
                 color = LitterTheme.textPrimary,
-                fontSize = 18.sp,
+                fontSize = 18f.scaled,
                 fontWeight = FontWeight.SemiBold,
             )
             TextButton(onClick = onDismiss) {
@@ -984,14 +985,14 @@ private fun CollaborationModeSheet(
                     Text(
                         text = preset.name,
                         color = LitterTheme.textPrimary,
-                        fontSize = 14.sp,
+                        fontSize = LitterTextStyle.body.scaled,
                         fontWeight = FontWeight.SemiBold,
                     )
                     preset.reasoningEffort?.let { effort ->
                         Text(
                             text = collaborationModeEffortLabel(effort),
                             color = LitterTheme.textSecondary,
-                            fontSize = 11.sp,
+                            fontSize = LitterTextStyle.caption2.scaled,
                         )
                     }
                 }
@@ -999,7 +1000,7 @@ private fun CollaborationModeSheet(
                     Text(
                         text = "Selected",
                         color = LitterTheme.accent,
-                        fontSize = 11.sp,
+                        fontSize = LitterTextStyle.caption2.scaled,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -1080,7 +1081,7 @@ private fun PlanContextBadge(progress: String) {
     Text(
         text = "Plan $progress",
         color = LitterTheme.accent,
-        fontSize = 11.sp,
+        fontSize = LitterTextStyle.caption2.scaled,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
             .background(LitterTheme.surface.copy(alpha = 0.72f), RoundedCornerShape(999.dp))
@@ -1104,21 +1105,21 @@ private fun DiffSummaryBadge(
         Text(
             text = "\u2194",
             color = LitterTheme.accent,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontWeight = FontWeight.SemiBold,
         )
         if (summary.hasChanges) {
             Text(
                 text = "+${summary.additions}",
                 color = LitterTheme.success,
-                fontSize = 11.sp,
+                fontSize = LitterTextStyle.caption2.scaled,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = BerkeleyMono,
             )
             Text(
                 text = "-${summary.deletions}",
                 color = LitterTheme.danger,
-                fontSize = 11.sp,
+                fontSize = LitterTextStyle.caption2.scaled,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = BerkeleyMono,
             )
@@ -1126,7 +1127,7 @@ private fun DiffSummaryBadge(
             Text(
                 text = "Diff",
                 color = LitterTheme.textSecondary,
-                fontSize = 11.sp,
+                fontSize = LitterTextStyle.caption2.scaled,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -1250,14 +1251,14 @@ private fun SessionDiffSheet(
                 Text(
                     text = "+${totalSummary.additions}",
                     color = LitterTheme.success,
-                    fontSize = 12.sp,
+                    fontSize = LitterTextStyle.caption.scaled,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = BerkeleyMono,
                 )
                 Text(
                     text = "-${totalSummary.deletions}",
                     color = LitterTheme.danger,
-                    fontSize = 12.sp,
+                    fontSize = LitterTextStyle.caption.scaled,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = BerkeleyMono,
                 )
@@ -1349,28 +1350,28 @@ private fun SessionDiffSectionHeader(
         Text(
             text = section.title.uppercase(),
             color = LitterTheme.textSecondary,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.weight(1f),
         )
         Text(
             text = "+${section.summary.additions}",
             color = LitterTheme.success,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontWeight = FontWeight.SemiBold,
             fontFamily = BerkeleyMono,
         )
         Text(
             text = "-${section.summary.deletions}",
             color = LitterTheme.danger,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontWeight = FontWeight.SemiBold,
             fontFamily = BerkeleyMono,
         )
         Text(
             text = if (expanded) "▲" else "▼",
             color = LitterTheme.textMuted,
-            fontSize = 11.sp,
+            fontSize = LitterTextStyle.caption2.scaled,
             fontWeight = FontWeight.Bold,
         )
     }
@@ -1402,7 +1403,7 @@ private fun StreamingCursor() {
     )
     Text(
         text = "Thinking...",
-        fontSize = 14.sp,
+        fontSize = LitterTextStyle.body.scaled,
         fontWeight = FontWeight.Medium,
         style = TextStyle(brush = shimmerBrush),
     )

@@ -40,12 +40,22 @@ struct ConversationComposerEntryRowView: View {
         self.onInterrupt = onInterrupt
     }
 
+    @State private var showExpanded: Bool = false
+
     private var hasText: Bool {
         !inputText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private var canSend: Bool {
         hasText || hasAttachment
+    }
+
+    /// Show the expand affordance once the composer is multi-line or starts to
+    /// wrap, matching ChatGPT's behaviour. Short prompts stay clutter-free.
+    private var shouldShowExpand: Bool {
+        !voiceManager.isRecording
+            && !voiceManager.isTranscribing
+            && (inputText.contains("\n") || inputText.count > 60)
     }
 
     var body: some View {
@@ -119,6 +129,24 @@ struct ConversationComposerEntryRowView: View {
             }
             .frame(minHeight: 36)
             .modifier(GlassRoundedRectModifier(cornerRadius: 20))
+            .overlay(alignment: .topTrailing) {
+                if shouldShowExpand {
+                    Button {
+                        showExpanded = true
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(LitterFont.styled(size: 12, weight: .semibold))
+                            .foregroundColor(LitterTheme.textSecondary)
+                            .padding(6)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.top, 2)
+                    .padding(.trailing, 6)
+                    .accessibilityLabel("Expand composer")
+                    .transition(.opacity.combined(with: .scale))
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: shouldShowExpand)
 
             if isTurnActive {
                 Button(action: onInterrupt) {
@@ -137,5 +165,14 @@ struct ConversationComposerEntryRowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 6)
+        .fullScreenCover(isPresented: $showExpanded) {
+            ConversationComposerExpandedView(
+                inputText: $inputText,
+                isPresented: $showExpanded,
+                onPasteImage: onPasteImage,
+                onSend: onSendText,
+                hasAttachment: hasAttachment
+            )
+        }
     }
 }

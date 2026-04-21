@@ -142,6 +142,7 @@ private fun StreamingMarkdownText(
         text = text,
         modifier = modifier.fillMaxWidth(),
         bodySize = bodySize,
+        usePhysicalDpTextSize = true,
     )
 }
 

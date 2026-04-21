@@ -29,7 +29,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.litter.android.state.displayTitle
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 import uniffi.codex_mobile_client.AppSessionSummary
 import uniffi.codex_mobile_client.PinnedThreadKey
 
@@ -68,7 +70,7 @@ fun ThreadSearchResults(
             Text(
                 text = if (sessions.isEmpty()) "No threads yet" else "No matches",
                 color = LitterTheme.textMuted,
-                fontSize = 12.sp,
+                fontSize = LitterTextStyle.caption.scaled,
                 modifier = Modifier
                     .align(Alignment.Center)
                     .padding(vertical = 24.dp),
@@ -121,7 +123,7 @@ private fun ThreadSearchRow(
             Text(
                 text = session.displayTitle,
                 color = LitterTheme.textPrimary,
-                fontSize = 12.sp,
+                fontSize = LitterTextStyle.caption.scaled,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
@@ -130,18 +132,18 @@ private fun ThreadSearchRow(
                 Text(
                     text = session.serverDisplayName,
                     color = LitterTheme.accent.copy(alpha = 0.7f),
-                    fontSize = 10.sp,
+                    fontSize = 10f.scaled,
                     fontFamily = FontFamily.Monospace,
                 )
                 Text(
                     text = "\u00b7",
                     color = LitterTheme.textMuted.copy(alpha = 0.5f),
-                    fontSize = 10.sp,
+                    fontSize = 10f.scaled,
                 )
                 Text(
                     text = HomeDashboardSupport.workspaceLabel(session.cwd),
                     color = LitterTheme.textSecondary.copy(alpha = 0.8f),
-                    fontSize = 10.sp,
+                    fontSize = 10f.scaled,
                     fontFamily = FontFamily.Monospace,
                 )
                 val relative = HomeDashboardSupport.relativeTime(session.updatedAt)
@@ -149,12 +151,12 @@ private fun ThreadSearchRow(
                     Text(
                         text = "\u00b7",
                         color = LitterTheme.textMuted.copy(alpha = 0.5f),
-                        fontSize = 10.sp,
+                        fontSize = 10f.scaled,
                     )
                     Text(
                         text = relative,
                         color = LitterTheme.textMuted.copy(alpha = 0.8f),
-                        fontSize = 10.sp,
+                        fontSize = 10f.scaled,
                         fontFamily = FontFamily.Monospace,
                     )
                 }

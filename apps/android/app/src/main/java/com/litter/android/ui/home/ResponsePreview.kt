@@ -52,8 +52,10 @@ fun ResponsePreview(
     val configuration = LocalConfiguration.current
     val capFraction = if (zoomLevel >= 4) 0.5f else 0.25f
     val capDp = (configuration.screenHeightDp * capFraction).dp
-    val scale = LocalTextScale.current
-    val bodySize = LitterTextStyle.body * scale
+    // Pass the unscaled base size — StreamingMarkdownText reads
+    // LocalTextScale itself and applies it. Passing a pre-scaled value
+    // would double-scale the preview (17 × scale × scale).
+    val bodySize = LitterTextStyle.body
 
     Crossfade(
         targetState = blockId,

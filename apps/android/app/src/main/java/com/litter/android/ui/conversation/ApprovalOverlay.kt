@@ -30,7 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.OutlinedTextField
 import com.litter.android.ui.BerkeleyMono
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LitterTheme
+import com.litter.android.ui.scaled
 import kotlinx.coroutines.launch
 import uniffi.codex_mobile_client.AppStore
 import uniffi.codex_mobile_client.ApprovalDecisionValue
@@ -109,7 +111,7 @@ private fun ApprovalCard(
         Text(
             text = title,
             color = LitterTheme.textPrimary,
-            fontSize = 16.sp,
+            fontSize = 16f.scaled,
         )
 
         // Command text
@@ -118,7 +120,7 @@ private fun ApprovalCard(
                 text = cmd,
                 color = LitterTheme.accent,
                 fontFamily = LitterTheme.monoFont,
-                fontSize = 13.sp,
+                fontSize = LitterTextStyle.code.scaled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(LitterTheme.codeBackground, RoundedCornerShape(6.dp))
@@ -131,7 +133,7 @@ private fun ApprovalCard(
             Text(
                 text = "in $cwd",
                 color = LitterTheme.textSecondary,
-                fontSize = 12.sp,
+                fontSize = LitterTextStyle.caption.scaled,
             )
         }
 
@@ -141,7 +143,7 @@ private fun ApprovalCard(
                 text = path,
                 color = LitterTheme.textSecondary,
                 fontFamily = LitterTheme.monoFont,
-                fontSize = 12.sp,
+                fontSize = LitterTextStyle.caption.scaled,
             )
         }
 
@@ -201,7 +203,7 @@ private fun UserInputCard(
             Text(
                 text = requester,
                 color = LitterTheme.accent,
-                fontSize = 11.sp,
+                fontSize = LitterTextStyle.caption2.scaled,
             )
         }
 
@@ -209,7 +211,7 @@ private fun UserInputCard(
             Text(
                 text = question.question,
                 color = LitterTheme.textPrimary,
-                fontSize = 14.sp,
+                fontSize = LitterTextStyle.body.scaled,
             )
 
             if (question.options.isNotEmpty()) {
@@ -225,7 +227,7 @@ private fun UserInputCard(
                         Text(
                             text = option.label,
                             color = if (isSelected) Color.Black else LitterTheme.textPrimary,
-                            fontSize = 12.sp,
+                            fontSize = LitterTextStyle.caption.scaled,
                             modifier = Modifier
                                 .background(
                                     if (isSelected) LitterTheme.accent else LitterTheme.codeBackground,

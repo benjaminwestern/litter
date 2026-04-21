@@ -1,6 +1,9 @@
 use std::hash::{Hash, Hasher};
 
-use crate::conversation_uniffi::{HydratedConversationItem, HydratedConversationItemContent};
+use crate::conversation_uniffi::{
+    HydratedCommandActionKind, HydratedCommandExecutionData, HydratedConversationItem,
+    HydratedConversationItemContent,
+};
 use crate::types::AppSubagentStatus;
 use crate::types::{
     AppModeKind, AppPlanImplementationPromptSnapshot, AppPlanProgressSnapshot, PendingApproval,
@@ -132,6 +135,91 @@ fn merged_hydrated_items(
     }
     merged.extend(selected_overlays.into_iter().cloned().map(Into::into));
     merged
+}
+
+pub(crate) fn project_hydrated_item(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    item: &HydratedConversationItem,
+) -> HydratedConversationItem {
+    let HydratedConversationItemContent::MultiAgentAction(data) = &item.content else {
+        return item.clone();
+    };
+
+    let projected_targets: Vec<String> = data
+        .targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| {
+            data.receiver_thread_ids
+                .get(index)
+                .and_then(|thread_id| resolve_agent_target_label(snapshot, server_id, thread_id))
+                .or_else(|| resolve_agent_target_label(snapshot, server_id, target))
+                .unwrap_or_else(|| target.clone())
+        })
+        .collect();
+
+    if projected_targets == data.targets {
+        return item.clone();
+    }
+
+    let mut projected = item.clone();
+    projected.content = HydratedConversationItemContent::MultiAgentAction(
+        crate::conversation_uniffi::HydratedMultiAgentActionData {
+            tool: data.tool.clone(),
+            status: data.status,
+            prompt: data.prompt.clone(),
+            targets: projected_targets,
+            receiver_thread_ids: data.receiver_thread_ids.clone(),
+            agent_states: data.agent_states.clone(),
+        },
+    );
+    projected
+}
+
+pub(crate) fn project_hydrated_items(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    items: &[HydratedConversationItem],
+) -> Vec<HydratedConversationItem> {
+    items
+        .iter()
+        .map(|item| project_hydrated_item(snapshot, server_id, item))
+        .collect()
+}
+
+fn resolve_agent_target_label(
+    snapshot: &AppSnapshot,
+    server_id: &str,
+    raw: &str,
+) -> Option<String> {
+    let normalized = sanitized_label_field(Some(raw))?;
+    if looks_like_agent_display_label(normalized) {
+        return Some(normalized.to_string());
+    }
+
+    let key = ThreadKey {
+        server_id: server_id.to_string(),
+        thread_id: normalized.to_string(),
+    };
+    let thread = snapshot.threads.get(&key)?;
+    agent_display_label(
+        thread.info.agent_nickname.as_deref(),
+        thread.info.agent_role.as_deref(),
+        Some(normalized),
+    )
+}
+
+fn looks_like_agent_display_label(value: &str) -> bool {
+    if !value.ends_with(']') {
+        return false;
+    }
+    let Some(open_bracket) = value.rfind('[') else {
+        return false;
+    };
+    let nickname = value[..open_bracket].trim();
+    let role = value[open_bracket + 1..value.len() - 1].trim();
+    !nickname.is_empty() && !role.is_empty()
 }
 
 fn same_overlay_semantics(
@@ -269,9 +357,22 @@ pub struct AppSessionSummary {
     pub is_fork: bool,
     // Display-specific fields
     pub last_response_preview: Option<String>,
+    // `source_turn_id` of the assistant item that produced
+    // `last_response_preview`. Home-dashboard preview uses this as its
+    // crossfade key so the text only re-transitions when a NEW assistant
+    // message arrives — not when the user sends a new prompt (which flips
+    // `stats.turn_count` even though the preview text hasn't changed yet).
+    pub last_response_turn_id: Option<String>,
     pub last_user_message: Option<String>,
     pub last_tool_label: Option<String>,
     pub recent_tool_log: Vec<AppToolLogEntry>,
+    // Bounds of the most recent turn, in milliseconds since epoch. The home
+    // dashboard's zoom-4 stopwatch chip uses `start` + either `end` or "now"
+    // (picked by the iOS side based on `has_active_turn`) to show the running
+    // or completed turn duration. `None` when the thread has no turn-id'd
+    // items yet.
+    pub last_turn_start_ms: Option<i64>,
+    pub last_turn_end_ms: Option<i64>,
     // Stats (None when thread has no hydrated items)
     pub stats: Option<AppConversationStats>,
     pub token_usage: Option<AppTokenUsage>,
@@ -315,8 +416,7 @@ impl TryFrom<AppSnapshot> for AppSnapshotRecord {
                 let can_use_ipc =
                     can_use_transport_actions && ipc_state == AppServerIpcState::Ready;
 
-                let usage_stats =
-                    compute_server_usage_stats(&snapshot, &server.server_id);
+                let usage_stats = compute_server_usage_stats(&snapshot, &server.server_id);
 
                 AppServerSnapshot {
                     server_id: server.server_id,
@@ -373,8 +473,11 @@ fn app_thread_snapshot_from_state(
     snapshot: &AppSnapshot,
     thread: &ThreadSnapshot,
 ) -> Result<AppThreadSnapshot, String> {
-    let hydrated_conversation_items =
-        merged_hydrated_items(&thread.items, &thread.local_overlay_items);
+    let hydrated_conversation_items = project_hydrated_items(
+        snapshot,
+        &thread.key.server_id,
+        &merged_hydrated_items(&thread.items, &thread.local_overlay_items),
+    );
     let stats = if hydrated_conversation_items.is_empty() {
         None
     } else {
@@ -495,9 +598,12 @@ pub(crate) fn empty_session_summary(key: ThreadKey) -> AppSessionSummary {
         is_subagent: false,
         is_fork: false,
         last_response_preview: None,
+        last_response_turn_id: None,
         last_user_message: None,
         last_tool_label: None,
         recent_tool_log: Vec::new(),
+        last_turn_start_ms: None,
+        last_turn_end_ms: None,
         stats: None,
         token_usage: None,
     }
@@ -581,10 +687,17 @@ pub(crate) fn app_session_summary(
         is_subagent: is_fork && has_agent_label,
         is_fork,
         last_response_preview: activity.last_response,
+        last_response_turn_id: activity.last_response_turn_id,
         last_user_message: activity.last_user_message,
         last_tool_label: activity.last_tool,
         recent_tool_log: activity.log,
-        stats: if thread.items.is_empty() { None } else { Some(activity.stats) },
+        last_turn_start_ms: activity.last_turn_start_ms,
+        last_turn_end_ms: activity.last_turn_end_ms,
+        stats: if thread.items.is_empty() {
+            None
+        } else {
+            Some(activity.stats)
+        },
         token_usage: thread_token_usage(thread),
     }
 }
@@ -624,8 +737,7 @@ fn compute_server_usage_stats(
     let mut total_tokens: u64 = 0;
     let mut tokens_by_thread = Vec::new();
     let mut day_buckets: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
-    let mut model_counts: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
+    let mut model_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
     for thread in &server_threads {
         // Token usage per thread
@@ -693,15 +805,19 @@ fn compute_server_usage_stats(
 
 struct ConversationActivity {
     last_response: Option<String>,
+    last_response_turn_id: Option<String>,
     last_user_message: Option<String>,
     last_tool: Option<String>,
     stats: AppConversationStats,
     log: Vec<AppToolLogEntry>,
+    last_turn_start_ms: Option<i64>,
+    last_turn_end_ms: Option<i64>,
 }
 
 /// Walk conversation items to extract full stats, last activity, and tool log.
 fn extract_conversation_activity(items: &[HydratedConversationItem]) -> ConversationActivity {
     let mut last_response: Option<String> = None;
+    let mut last_response_turn_id: Option<String> = None;
     let mut last_user_message: Option<String> = None;
     let mut last_tool: Option<String> = None;
 
@@ -731,6 +847,115 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
     let mut last_ts: Option<f64> = None;
     let mut log_entries: Vec<AppToolLogEntry> = Vec::new();
 
+    // Turn bounds: track the currently-accumulating turn so we end up with
+    // the min/max timestamps of items in the *last* turn seen.
+    let mut current_turn_id: Option<String> = None;
+    let mut current_turn_min: Option<f64> = None;
+    let mut current_turn_max: Option<f64> = None;
+
+    // Exploration grouping: accumulate consecutive pure-exploration command
+    // items (reads, searches, listings) and emit a single rolled-up
+    // `"Explore"` log entry when a non-exploration item breaks the run (or
+    // at the end of the walk). Matches the conversation view's grouping.
+    let mut exploration_reads: u32 = 0;
+    let mut exploration_searches: u32 = 0;
+    let mut exploration_listings: u32 = 0;
+    let mut exploration_fallback: u32 = 0;
+    let mut exploration_count: u32 = 0;
+    let mut exploration_in_progress = false;
+
+    fn flush_exploration(
+        log_entries: &mut Vec<AppToolLogEntry>,
+        reads: &mut u32,
+        searches: &mut u32,
+        listings: &mut u32,
+        fallback: &mut u32,
+        count: &mut u32,
+        in_progress: &mut bool,
+    ) {
+        if *count == 0 {
+            return;
+        }
+        let prefix = if *in_progress {
+            "Exploring"
+        } else {
+            "Explored"
+        };
+        let mut parts: Vec<String> = Vec::new();
+        if *reads > 0 {
+            parts.push(format!(
+                "{} {}",
+                reads,
+                if *reads == 1 { "file" } else { "files" }
+            ));
+        }
+        if *searches > 0 {
+            parts.push(format!(
+                "{} {}",
+                searches,
+                if *searches == 1 { "search" } else { "searches" }
+            ));
+        }
+        if *listings > 0 {
+            parts.push(format!(
+                "{} {}",
+                listings,
+                if *listings == 1 {
+                    "listing"
+                } else {
+                    "listings"
+                }
+            ));
+        }
+        if *fallback > 0 {
+            parts.push(format!(
+                "{} {}",
+                fallback,
+                if *fallback == 1 { "step" } else { "steps" }
+            ));
+        }
+        let detail = if parts.is_empty() {
+            format!(
+                "{} {} step{}",
+                prefix,
+                count,
+                if *count == 1 { "" } else { "s" }
+            )
+        } else {
+            format!("{} {}", prefix, parts.join(", "))
+        };
+        let status = if *in_progress {
+            "inprogress"
+        } else {
+            "completed"
+        };
+        log_entries.push(AppToolLogEntry {
+            tool: "Explore".to_string(),
+            detail,
+            status: status.to_string(),
+        });
+        *reads = 0;
+        *searches = 0;
+        *listings = 0;
+        *fallback = 0;
+        *count = 0;
+        *in_progress = false;
+    }
+
+    fn is_pure_exploration(data: &HydratedCommandExecutionData) -> bool {
+        if data.actions.is_empty() {
+            return false;
+        }
+        data.actions.iter().all(|action| {
+            matches!(
+                action.kind,
+                HydratedCommandActionKind::Read
+                    | HydratedCommandActionKind::Search
+                    | HydratedCommandActionKind::ListFiles
+            )
+        })
+    }
+
     // Forward pass — collect everything
     for item in items.iter() {
         // Track timestamps for session duration
@@ -741,11 +966,38 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
             last_ts = Some(ts);
         }
 
-        // Turn counting via distinct source_turn_id
+        // Turn counting via distinct source_turn_id + per-turn timestamp
+        // bounds. `current_turn_*` collapses to the last turn encountered.
         if let Some(ref turn_id) = item.source_turn_id {
             if matches!(&item.content, HydratedConversationItemContent::User(_)) {
                 seen_turn_ids.insert(turn_id.clone());
             }
+            if current_turn_id.as_ref() != Some(turn_id) {
+                current_turn_id = Some(turn_id.clone());
+                current_turn_min = item.timestamp;
+                current_turn_max = item.timestamp;
+            } else if let Some(ts) = item.timestamp {
+                current_turn_min = Some(current_turn_min.map_or(ts, |m| m.min(ts)));
+                current_turn_max = Some(current_turn_max.map_or(ts, |m| m.max(ts)));
+            }
+        }
+
+        // Non-CommandExecution (or non-pure-exploration command) breaks the
+        // exploration run — flush the buffer before handling the item.
+        let is_exploration_command = matches!(
+            &item.content,
+            HydratedConversationItemContent::CommandExecution(data) if is_pure_exploration(data)
+        );
+        if !is_exploration_command {
+            flush_exploration(
+                &mut log_entries,
+                &mut exploration_reads,
+                &mut exploration_searches,
+                &mut exploration_listings,
+                &mut exploration_fallback,
+                &mut exploration_count,
+                &mut exploration_in_progress,
+            );
         }
 
         match &item.content {
@@ -774,13 +1026,36 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
                 if let Some(ms) = data.duration_ms {
                     total_command_duration_ms += ms;
                 }
-                let cmd = data.command.trim();
-                let status = format!("{:?}", data.status).to_lowercase();
-                log_entries.push(AppToolLogEntry {
-                    tool: "Bash".to_string(),
-                    detail: cmd.to_string(),
-                    status,
-                });
+                if is_pure_exploration(data) {
+                    // Group consecutive exploration commands. Action kinds
+                    // get summed; the buffer flushes into a single `Explore`
+                    // entry once the run ends.
+                    exploration_count += 1;
+                    let in_progress = matches!(
+                        data.status,
+                        crate::types::AppOperationStatus::Pending
+                            | crate::types::AppOperationStatus::InProgress
+                    );
+                    if in_progress {
+                        exploration_in_progress = true;
+                    }
+                    for action in &data.actions {
+                        match action.kind {
+                            HydratedCommandActionKind::Read => exploration_reads += 1,
+                            HydratedCommandActionKind::Search => exploration_searches += 1,
+                            HydratedCommandActionKind::ListFiles => exploration_listings += 1,
+                            HydratedCommandActionKind::Unknown => exploration_fallback += 1,
+                        }
+                    }
+                } else {
+                    let cmd = data.command.trim();
+                    let status = format!("{:?}", data.status).to_lowercase();
+                    log_entries.push(AppToolLogEntry {
+                        tool: "Bash".to_string(),
+                        detail: cmd.to_string(),
+                        status,
+                    });
+                }
             }
             HydratedConversationItemContent::FileChange(data) => {
                 for entry in &data.changes {
@@ -824,9 +1099,19 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
                     status,
                 });
             }
-            HydratedConversationItemContent::WebSearch(_) => {
+            HydratedConversationItemContent::WebSearch(data) => {
                 web_search_count += 1;
                 tool_call_count += 1;
+                let status = if data.is_in_progress {
+                    "inprogress"
+                } else {
+                    "completed"
+                };
+                log_entries.push(AppToolLogEntry {
+                    tool: "WebSearch".to_string(),
+                    detail: data.query.clone(),
+                    status: status.to_string(),
+                });
             }
             HydratedConversationItemContent::ImageView(_) => {
                 image_count += 1;
@@ -838,6 +1123,17 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
         }
     }
 
+    // Trailing run of exploration commands at the end of the thread.
+    flush_exploration(
+        &mut log_entries,
+        &mut exploration_reads,
+        &mut exploration_searches,
+        &mut exploration_listings,
+        &mut exploration_fallback,
+        &mut exploration_count,
+        &mut exploration_in_progress,
+    );
+
     // Reverse pass for last assistant message, last user message, and last tool label
     for item in items.iter().rev() {
         if last_response.is_some() && last_user_message.is_some() && last_tool.is_some() {
@@ -848,6 +1144,7 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
                 let text = data.text.trim();
                 if !text.is_empty() {
                     last_response = Some(text.to_string());
+                    last_response_turn_id = item.source_turn_id.clone();
                 }
             }
             HydratedConversationItemContent::User(data) if last_user_message.is_none() => {
@@ -887,8 +1184,12 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
         log_entries
     };
 
+    let last_turn_start_ms = current_turn_min.map(|ts| (ts * 1000.0) as i64);
+    let last_turn_end_ms = current_turn_max.map(|ts| (ts * 1000.0) as i64);
+
     ConversationActivity {
         last_response,
+        last_response_turn_id,
         last_user_message,
         last_tool,
         stats: AppConversationStats {
@@ -916,6 +1217,8 @@ fn extract_conversation_activity(items: &[HydratedConversationItem]) -> Conversa
             session_duration_ms,
         },
         log,
+        last_turn_start_ms,
+        last_turn_end_ms,
     }
 }
 
@@ -1385,5 +1688,97 @@ mod tests {
             projected.hydrated_conversation_items[0].id,
             "server-user-item"
         );
+    }
+
+    #[test]
+    fn app_thread_snapshot_projects_multi_agent_targets_to_display_labels() {
+        let mut snapshot = AppSnapshot::default();
+
+        let parent = ThreadSnapshot::from_info(
+            "srv",
+            ThreadInfo {
+                id: "parent-thread".to_string(),
+                title: Some("Parent".to_string()),
+                model: None,
+                preview: Some("Preview".to_string()),
+                cwd: None,
+                path: None,
+                model_provider: None,
+                agent_nickname: None,
+                agent_role: None,
+                parent_thread_id: None,
+                agent_status: None,
+                created_at: None,
+                status: ThreadSummaryStatus::Idle,
+                updated_at: Some(20),
+            },
+        );
+        let parent_key = parent.key.clone();
+        snapshot.threads.insert(parent_key.clone(), parent);
+
+        let child = ThreadSnapshot::from_info(
+            "srv",
+            ThreadInfo {
+                id: "child-thread".to_string(),
+                title: Some("Child".to_string()),
+                model: None,
+                preview: Some("Child preview".to_string()),
+                cwd: None,
+                path: None,
+                model_provider: None,
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("explorer".to_string()),
+                parent_thread_id: Some("parent-thread".to_string()),
+                agent_status: Some("running".to_string()),
+                created_at: None,
+                status: ThreadSummaryStatus::Active,
+                updated_at: Some(21),
+            },
+        );
+        snapshot.threads.insert(child.key.clone(), child);
+
+        snapshot
+            .threads
+            .get_mut(&parent_key)
+            .expect("parent thread exists")
+            .items
+            .push(crate::conversation_uniffi::HydratedConversationItem {
+                id: "collab-1".to_string(),
+                content:
+                    crate::conversation_uniffi::HydratedConversationItemContent::MultiAgentAction(
+                        crate::conversation_uniffi::HydratedMultiAgentActionData {
+                            tool: "spawnAgent".to_string(),
+                            status: crate::types::AppOperationStatus::Completed,
+                            prompt: Some("Inspect the thread".to_string()),
+                            targets: vec!["child-thread".to_string()],
+                            receiver_thread_ids: vec!["child-thread".to_string()],
+                            agent_states: vec![
+                                crate::conversation_uniffi::HydratedMultiAgentStateData {
+                                    target_id: "child-thread".to_string(),
+                                    status: crate::types::AppSubagentStatus::Running,
+                                    message: Some("Working".to_string()),
+                                },
+                            ],
+                        },
+                    ),
+                source_turn_id: Some("turn-1".to_string()),
+                source_turn_index: Some(0),
+                timestamp: None,
+                is_from_user_turn_boundary: false,
+            });
+
+        let projected =
+            app_thread_snapshot_from_state(&snapshot, snapshot.threads.get(&parent_key).unwrap())
+                .unwrap();
+
+        let crate::conversation_uniffi::HydratedConversationItemContent::MultiAgentAction(data) =
+            &projected.hydrated_conversation_items[0].content
+        else {
+            panic!("expected multi-agent action item");
+        };
+
+        assert_eq!(data.targets, vec!["Scout [explorer]".to_string()]);
+        assert_eq!(data.receiver_thread_ids, vec!["child-thread".to_string()]);
+        assert_eq!(data.agent_states[0].target_id, "child-thread");
     }
 }

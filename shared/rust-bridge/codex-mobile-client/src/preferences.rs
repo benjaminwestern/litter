@@ -169,10 +169,7 @@ pub fn preferences_save(directory: String, value: MobilePreferences) -> MobilePr
 /// Insert `key` at the front of the pinned-threads list. If it's already
 /// pinned, leaves position unchanged. Returns the updated preferences.
 #[uniffi::export]
-pub fn preferences_add_pinned_thread(
-    directory: String,
-    key: PinnedThreadKey,
-) -> MobilePreferences {
+pub fn preferences_add_pinned_thread(directory: String, key: PinnedThreadKey) -> MobilePreferences {
     let path = preferences_path(&directory);
     let _guard = WRITE_LOCK.lock().ok();
     let mut prefs = read_preferences(&path);
@@ -216,10 +213,7 @@ pub fn preferences_set_home_selection(
 /// the hidden set if not already present. Also removes it from pinned so
 /// the user's explicit pin doesn't compete with their hide.
 #[uniffi::export]
-pub fn preferences_add_hidden_thread(
-    directory: String,
-    key: PinnedThreadKey,
-) -> MobilePreferences {
+pub fn preferences_add_hidden_thread(directory: String, key: PinnedThreadKey) -> MobilePreferences {
     let path = preferences_path(&directory);
     let _guard = WRITE_LOCK.lock().ok();
     let mut prefs = read_preferences(&path);
@@ -319,7 +313,10 @@ mod tests {
                 selected_project_id: Some("srv1::/path".into()),
             },
         );
-        assert_eq!(prefs.home_selection.selected_server_id.as_deref(), Some("srv1"));
+        assert_eq!(
+            prefs.home_selection.selected_server_id.as_deref(),
+            Some("srv1")
+        );
 
         // Persists across loads.
         let reloaded = preferences_load(directory);

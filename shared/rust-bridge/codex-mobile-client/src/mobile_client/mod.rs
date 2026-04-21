@@ -53,7 +53,8 @@ use self::store_listener::*;
 use self::thread_projection::*;
 pub use self::thread_projection::{
     copy_thread_runtime_fields, reasoning_effort_from_string, reasoning_effort_string,
-    thread_info_from_upstream_thread, thread_snapshot_from_upstream_thread_with_overrides,
+    reconcile_active_turn, thread_info_from_upstream_thread,
+    thread_snapshot_from_upstream_thread_with_overrides,
 };
 /// Top-level entry point for platform code (iOS / Android).
 ///
@@ -799,22 +800,25 @@ impl MobileClient {
     }
 
     /// Disconnect a server by its ID.
+    ///
+    /// Always clears the server from the app store snapshot and drops any
+    /// OAuth callback tunnel, even when no live session exists (e.g. the
+    /// server was already disconnected or never connected this launch).
+    /// Otherwise removing a disconnected server pill from the UI would be a
+    /// no-op because the snapshot would still carry it.
     pub fn disconnect_server(&self, server_id: &str) {
         let session = self.sessions_write().remove(server_id);
+        self.app_store.remove_server(server_id);
 
-        if let Some(session) = session {
-            // Swift/Kotlin can call this from outside any Tokio runtime.
-            self.app_store.remove_server(server_id);
-            let inner = Arc::clone(&self.oauth_callback_tunnels);
-            let server_id_owned = server_id.to_string();
-            Self::spawn_detached(async move {
-                inner.lock().await.remove(&server_id_owned);
+        let inner = Arc::clone(&self.oauth_callback_tunnels);
+        let server_id_owned = server_id.to_string();
+        Self::spawn_detached(async move {
+            inner.lock().await.remove(&server_id_owned);
+            if let Some(session) = session {
                 session.disconnect().await;
-            });
-            info!("MobileClient: disconnected server {server_id}");
-        } else {
-            warn!("MobileClient: disconnect_server called for unknown {server_id}");
-        }
+            }
+        });
+        info!("MobileClient: disconnected server {server_id}");
     }
 
     /// Return the configs of all currently connected servers.
@@ -875,45 +879,13 @@ impl MobileClient {
     }
 
     fn spawn_post_connect_warmup(&self, server_id: String, session: Arc<ServerSession>) {
-        let sessions = Arc::clone(&self.sessions);
-        let app_store = Arc::clone(&self.app_store);
-        Self::spawn_detached(async move {
-            let account_future = refresh_account_from_app_server(
-                Arc::clone(&session),
-                Arc::clone(&app_store),
-                Arc::clone(&sessions),
-                server_id.as_str(),
-            );
-            let threads_future = refresh_thread_list_from_app_server_if_current(
-                Arc::clone(&session),
-                Arc::clone(&app_store),
-                Arc::clone(&sessions),
-                server_id.as_str(),
-            );
-            let (account_result, thread_result) = tokio::join!(account_future, threads_future);
-
-            match account_result {
-                Ok(()) => trace!(
-                    "MobileClient: post-connect account sync completed server_id={}",
-                    server_id
-                ),
-                Err(error) => warn!(
-                    "MobileClient: failed to sync account for {}: {}",
-                    server_id, error
-                ),
-            }
-
-            match thread_result {
-                Ok(()) => trace!(
-                    "MobileClient: post-connect thread refresh completed server_id={}",
-                    server_id
-                ),
-                Err(error) => warn!(
-                    "MobileClient: failed to refresh thread list for {}: {}",
-                    server_id, error
-                ),
-            }
-        });
+        run_connect_warmup(
+            Arc::clone(&self.sessions),
+            Arc::clone(&self.app_store),
+            server_id,
+            session,
+            "post-connect",
+        );
     }
 
     pub async fn start_remote_ssh_oauth_login(&self, server_id: &str) -> Result<String, RpcError> {
@@ -1051,7 +1023,13 @@ impl MobileClient {
             .await
         {
             Ok(response) => {
-                let snapshot = thread_snapshot_from_upstream_thread_with_overrides(
+                let key = ThreadKey {
+                    server_id: server_id.to_string(),
+                    thread_id: thread_id.to_string(),
+                };
+                let existing = self.app_store.thread_snapshot(&key);
+                let turns = response.thread.turns.clone();
+                let mut snapshot = thread_snapshot_from_upstream_thread_with_overrides(
                     server_id,
                     response.thread,
                     Some(response.model),
@@ -1063,6 +1041,7 @@ impl MobileClient {
                     Some(response.sandbox.into()),
                 )
                 .map_err(RpcError::Deserialization)?;
+                reconcile_active_turn(existing.as_ref(), &mut snapshot, &turns);
                 self.app_store.upsert_thread_snapshot(snapshot);
                 Ok(())
             }
@@ -1084,7 +1063,12 @@ impl MobileClient {
                     )
                     .await
                     .map_err(RpcError::Deserialization)?;
-                let snapshot = thread_snapshot_from_upstream_thread_with_overrides(
+                let key = ThreadKey {
+                    server_id: server_id.to_string(),
+                    thread_id: thread_id.to_string(),
+                };
+                let existing = self.app_store.thread_snapshot(&key);
+                let mut snapshot = thread_snapshot_from_upstream_thread_with_overrides(
                     server_id,
                     response.thread,
                     None,
@@ -1093,6 +1077,9 @@ impl MobileClient {
                     response.sandbox.map(Into::into),
                 )
                 .map_err(RpcError::Deserialization)?;
+                // include_turns=false: pass an empty slice so reconcile_active_turn
+                // preserves any local active state (no evidence to clear it).
+                reconcile_active_turn(existing.as_ref(), &mut snapshot, &[]);
                 self.app_store.upsert_thread_snapshot(snapshot);
                 Ok(())
             }
@@ -1315,6 +1302,7 @@ impl MobileClient {
                         params: upstream::TurnSteerParams {
                             thread_id: params.thread_id.clone(),
                             input: direct_params.input.clone(),
+                            responsesapi_client_metadata: None,
                             expected_turn_id: active_turn_id,
                         },
                     },
@@ -1487,6 +1475,7 @@ impl MobileClient {
                 params: upstream::TurnSteerParams {
                     thread_id: key.thread_id.clone(),
                     input: draft.inputs,
+                    responsesapi_client_metadata: None,
                     expected_turn_id: active_turn_id,
                 },
             },
@@ -1610,6 +1599,7 @@ impl MobileClient {
                 )
                 .await
                 .map_err(|e| RpcError::Deserialization(e.to_string()))?;
+            let turns = response.thread.turns.clone();
             let mut snapshot = thread_snapshot_from_upstream_thread_with_overrides(
                 &key.server_id,
                 response.thread,
@@ -1620,6 +1610,7 @@ impl MobileClient {
             )
             .map_err(RpcError::Deserialization)?;
             copy_thread_runtime_fields(&current, &mut snapshot);
+            reconcile_active_turn(Some(&current), &mut snapshot, &turns);
             self.app_store.upsert_thread_snapshot(snapshot);
         }
 
@@ -1934,7 +1925,9 @@ impl MobileClient {
         Self::spawn_detached(async move {
             for delay_ms in USER_INPUT_RECONCILE_DELAYS_MS {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                match read_thread_response_from_app_server(Arc::clone(&session), &thread_id).await {
+                match read_thread_response_from_app_server(Arc::clone(&session), &thread_id, true)
+                    .await
+                {
                     Ok(response) => {
                         if let Err(error) = upsert_thread_snapshot_from_app_server_read_response(
                             &app_store, &server_id, response,
@@ -2087,6 +2080,7 @@ impl MobileClient {
                     text: "Implement the plan.".to_string(),
                     text_elements: Vec::new(),
                 }],
+                responsesapi_client_metadata: None,
                 cwd: None,
                 approval_policy: None,
                 approvals_reviewer: None,
@@ -2140,4 +2134,44 @@ impl Default for MobileClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub(super) fn run_connect_warmup(
+    sessions: Arc<RwLock<HashMap<String, Arc<ServerSession>>>>,
+    app_store: Arc<AppStoreReducer>,
+    server_id: String,
+    session: Arc<ServerSession>,
+    label: &'static str,
+) {
+    MobileClient::spawn_detached(async move {
+        let account_future = refresh_account_from_app_server(
+            Arc::clone(&session),
+            Arc::clone(&app_store),
+            Arc::clone(&sessions),
+            server_id.as_str(),
+        );
+        let threads_future = refresh_thread_list_from_app_server_if_current(
+            Arc::clone(&session),
+            Arc::clone(&app_store),
+            Arc::clone(&sessions),
+            server_id.as_str(),
+        );
+        let (account_result, thread_result) = tokio::join!(account_future, threads_future);
+
+        match account_result {
+            Ok(()) => trace!("MobileClient: {label} account sync completed server_id={server_id}"),
+            Err(error) => {
+                warn!("MobileClient: {label} account sync failed server_id={server_id}: {error}")
+            }
+        }
+
+        match thread_result {
+            Ok(()) => {
+                trace!("MobileClient: {label} thread refresh completed server_id={server_id}")
+            }
+            Err(error) => {
+                warn!("MobileClient: {label} thread refresh failed server_id={server_id}: {error}")
+            }
+        }
+    });
 }

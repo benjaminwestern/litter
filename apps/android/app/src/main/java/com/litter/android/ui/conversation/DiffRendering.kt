@@ -14,8 +14,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.litter.android.ui.LitterTextStyle
 import com.litter.android.ui.LocalTextScale
 import com.litter.android.ui.LitterTheme
 
@@ -24,9 +26,17 @@ internal fun SyntaxHighlightedDiffBlock(
     diff: String,
     titleHint: String? = null,
     modifier: Modifier = Modifier,
-    fontSize: TextUnit = 12.sp,
+    fontSize: TextUnit = TextUnit.Unspecified,
 ) {
     val textScale = LocalTextScale.current
+    // When the caller omits fontSize, default to the shared caption size.
+    // Non-composable default parameters can't call `.scaled`, so we resolve
+    // it here and skip the per-call multiplier below for the default path.
+    val resolvedFontPx: Float = if (fontSize.isUnspecified) {
+        LitterTextStyle.caption * textScale
+    } else {
+        fontSize.value * textScale
+    }
     val palette = remember(
         LitterTheme.textBody.toArgb(),
         LitterTheme.textSecondary.toArgb(),
@@ -77,7 +87,7 @@ internal fun SyntaxHighlightedDiffBlock(
             val textView = scrollView.getChildAt(0) as TextView
             textView.typeface = Typeface.MONOSPACE
             textView.includeFontPadding = false
-            textView.textSize = fontSize.value * textScale
+            textView.textSize = resolvedFontPx
             textView.setTextColor(LitterTheme.textBody.toArgb())
             textView.text = highlighted
         },

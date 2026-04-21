@@ -129,9 +129,8 @@ mod tests {
 
     #[test]
     fn ref_with_prefix_and_suffix() {
-        let got = parse_plugin_refs(
-            "open [@Codex](plugin://computer-use@openai-bundled) now".into(),
-        );
+        let got =
+            parse_plugin_refs("open [@Codex](plugin://computer-use@openai-bundled) now".into());
         assert_eq!(
             got,
             vec![
@@ -152,12 +151,14 @@ mod tests {
 
     #[test]
     fn multiple_refs() {
-        let got = parse_plugin_refs(
-            "use [@A](plugin://a@m1) then [@B](plugin://b@m2)".into(),
-        );
+        let got = parse_plugin_refs("use [@A](plugin://a@m1) then [@B](plugin://b@m2)".into());
         assert_eq!(got.len(), 4);
-        assert!(matches!(&got[1], TitleSegment::PluginRef { plugin_name, .. } if plugin_name == "a"));
-        assert!(matches!(&got[3], TitleSegment::PluginRef { plugin_name, .. } if plugin_name == "b"));
+        assert!(
+            matches!(&got[1], TitleSegment::PluginRef { plugin_name, .. } if plugin_name == "a")
+        );
+        assert!(
+            matches!(&got[3], TitleSegment::PluginRef { plugin_name, .. } if plugin_name == "b")
+        );
     }
 
     #[test]

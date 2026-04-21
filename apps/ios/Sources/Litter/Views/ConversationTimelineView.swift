@@ -75,42 +75,52 @@ struct ConversationTurnTimeline: View {
         return items.last(where: \.isAssistantItem)?.id
     }
 
-    @ViewBuilder
+    // Returns AnyView rather than `some View` with @ViewBuilder so the result
+    // type doesn't fan out to Group<_ConditionalContent<_ConditionalContent<…>, …>>.
+    // Time Profiler showed 44% of main-thread CPU in `outlined destroy` of that
+    // nested union; AnyView's per-node diff overhead is cheaper than destroying
+    // the union every SwiftUI pass.
     private func rowView(
         _ row: ConversationTimelineRowDescriptor,
         isLastRow: Bool,
         isPreferredExpandedCommandRow: Bool,
         retainedRichDetailItemIDs: Set<String>
-    ) -> some View {
+    ) -> AnyView {
         switch row {
         case .item(let item):
-            ConversationTimelineItemRow(
-                item: item,
-                serverId: serverId,
-                agentDirectoryVersion: agentDirectoryVersion,
-                isPreferredExpandedCommandRow: isPreferredExpandedCommandRow,
-                isLiveTurn: isLive,
-                isStreamingMessage: item.id == streamingAssistantItemId,
-                shouldPreserveRichDetail: retainedRichDetailItemIDs.contains(item.id),
-                messageActionsDisabled: messageActionsDisabled,
-                onStreamingSnapshotRendered: item.id == streamingAssistantItemId ? onStreamingSnapshotRendered : nil,
-                resolveTargetLabel: resolveTargetLabel,
-                onWidgetPrompt: onWidgetPrompt,
-                onEditUserItem: onEditUserItem,
-                onForkFromUserItem: onForkFromUserItem,
-                onOpenConversation: onOpenConversation
+            return AnyView(
+                ConversationTimelineItemRow(
+                    item: item,
+                    serverId: serverId,
+                    agentDirectoryVersion: agentDirectoryVersion,
+                    isPreferredExpandedCommandRow: isPreferredExpandedCommandRow,
+                    isLiveTurn: isLive,
+                    isStreamingMessage: item.id == streamingAssistantItemId,
+                    shouldPreserveRichDetail: retainedRichDetailItemIDs.contains(item.id),
+                    messageActionsDisabled: messageActionsDisabled,
+                    onStreamingSnapshotRendered: item.id == streamingAssistantItemId ? onStreamingSnapshotRendered : nil,
+                    resolveTargetLabel: resolveTargetLabel,
+                    onWidgetPrompt: onWidgetPrompt,
+                    onEditUserItem: onEditUserItem,
+                    onForkFromUserItem: onForkFromUserItem,
+                    onOpenConversation: onOpenConversation
+                )
+                .equatable()
             )
-            .equatable()
         case .exploration(let id, let items):
-            ConversationExplorationGroupRow(
-                id: id,
-                items: items,
-                showsCollapsedPreview: isLastRow
+            return AnyView(
+                ConversationExplorationGroupRow(
+                    id: id,
+                    items: items,
+                    showsCollapsedPreview: isLastRow
+                )
             )
         case .subagentGroup(_, let merged, _):
-            SubagentCardView(
-                data: merged,
-                serverId: serverId
+            return AnyView(
+                SubagentCardView(
+                    data: merged,
+                    serverId: serverId
+                )
             )
         }
     }
@@ -383,81 +393,95 @@ private struct ConversationTimelineItemRow: View, Equatable {
         return result
     }
 
-    var body: some View {
-        Group {
-            switch item.content {
-            case .user(let data):
-                userRow(data)
-            case .assistant(let data):
-                assistantRow(data)
-            case .codeReview(let data):
-                ConversationCodeReviewRow(data: data)
-            case .reasoning(let data):
-                ConversationReasoningRow(data: data)
-            case .todoList(let data):
-                ConversationTodoListRow(data: data)
-            case .proposedPlan(let data):
-                ConversationProposedPlanRow(data: data)
-            case .commandExecution(let data):
-                commandExecutionRow(data)
-            case .fileChange(let data):
-                toolCallRow(makeFileChangeModel(data))
-            case .turnDiff(let data):
-                ConversationTurnDiffRow(data: data)
-            case .mcpToolCall(let data):
-                if let view = data.computerUse {
+    // 16-case switch returns AnyView rather than `some View` so the body type
+    // doesn't resolve to a 4-deep `Group<_ConditionalContent<…>>` nested union.
+    // Time Profiler on 2026-04-18 showed that union's `outlined destroy` +
+    // witness-table accessor accounting for ~49% of main-thread CPU on device.
+    var body: AnyView {
+        switch item.content {
+        case .user(let data):
+            return AnyView(userRow(data))
+        case .assistant(let data):
+            return AnyView(assistantRow(data))
+        case .codeReview(let data):
+            return AnyView(ConversationCodeReviewRow(data: data))
+        case .reasoning(let data):
+            return AnyView(ConversationReasoningRow(data: data))
+        case .todoList(let data):
+            return AnyView(ConversationTodoListRow(data: data))
+        case .proposedPlan(let data):
+            return AnyView(ConversationProposedPlanRow(data: data))
+        case .commandExecution(let data):
+            return AnyView(commandExecutionRow(data))
+        case .fileChange(let data):
+            return AnyView(toolCallRow(makeFileChangeModel(data)))
+        case .turnDiff(let data):
+            return AnyView(ConversationTurnDiffRow(data: data))
+        case .mcpToolCall(let data):
+            if let view = data.computerUse {
+                return AnyView(
                     ComputerUseToolCallView(
                         data: data,
                         view: view,
                         externalExpanded: !isLiveTurn && shouldPreserveRichDetail
                     )
-                } else {
-                    toolCallRow(makeMcpModel(data))
-                }
-            case .dynamicToolCall(let data):
-                if CrossServerTools.isRichTool(data.tool) {
-                    CrossServerToolResultView(data: data)
-                } else {
-                    toolCallRow(makeDynamicToolModel(data))
-                }
-            case .multiAgentAction(let data):
+                )
+            } else {
+                return AnyView(toolCallRow(makeMcpModel(data)))
+            }
+        case .dynamicToolCall(let data):
+            if CrossServerTools.isRichTool(data.tool) {
+                return AnyView(CrossServerToolResultView(data: data))
+            } else {
+                return AnyView(toolCallRow(makeDynamicToolModel(data)))
+            }
+        case .multiAgentAction(let data):
+            return AnyView(
                 SubagentCardView(
                     data: data,
                     serverId: serverId
                 )
-            case .webSearch(let data):
-                toolCallRow(makeWebSearchModel(data))
-            case .imageView(let data):
-                toolCallRow(makeImageViewModel(data))
-            case .imageGeneration(let data):
+            )
+        case .webSearch(let data):
+            return AnyView(toolCallRow(makeWebSearchModel(data)))
+        case .imageView(let data):
+            return AnyView(toolCallRow(makeImageViewModel(data)))
+        case .imageGeneration(let data):
+            return AnyView(
                 ImageGenerationToolCallView(
                     data: data,
                     externalExpanded: !isLiveTurn && shouldPreserveRichDetail
                 )
-            case .widget(let data):
+            )
+        case .widget(let data):
+            return AnyView(
                 WidgetContainerView(
                     widget: data.widgetState,
                     onMessage: handleWidgetMessage
                 )
-            case .userInputResponse(let data):
-                ConversationUserInputResponseRow(data: data)
-            case .divider(let kind):
-                ConversationDividerRow(kind: kind, isLiveTurn: isLiveTurn)
-            case .error(let data):
+            )
+        case .userInputResponse(let data):
+            return AnyView(ConversationUserInputResponseRow(data: data))
+        case .divider(let kind):
+            return AnyView(ConversationDividerRow(kind: kind, isLiveTurn: isLiveTurn))
+        case .error(let data):
+            return AnyView(
                 ConversationSystemCardRow(
                     title: data.title.isEmpty ? "Error" : data.title,
                     content: [data.message, data.details].compactMap { $0 }.joined(separator: "\n\n"),
                     accent: LitterTheme.danger,
                     iconName: "exclamationmark.triangle.fill",
                 )
-            case .note(let data):
+            )
+        case .note(let data):
+            return AnyView(
                 ConversationSystemCardRow(
                     title: data.title,
                     content: data.body,
                     accent: LitterTheme.accent,
                     iconName: "info.circle.fill"
                 )
-            }
+            )
         }
     }
 
