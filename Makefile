@@ -149,7 +149,7 @@ ANDROID_RUST_SOURCES := $(shell find $(RUST_DIR) \
 $(shell mkdir -p $(STAMPS))
 
 .PHONY: all ios ios-sim ios-sim-fast ios-sim-run ios-device ios-device-fast ios-device-run ios-device-stop ios-run verify-ios-project catalyst catalyst-run \
-	android android-fast android-emulator-fast android-emulator-run android-device-run android-release android-debug android-install android-emulator-install \
+	android android-fast android-tools android-emulator-fast android-emulator-run android-device-run android-release android-debug android-install android-emulator-install \
 	rust-ios rust-ios-package rust-ios-device-release rust-ios-device-fast rust-ios-sim-fast rust-android rust-check rust-test rust-host-dev \
 	bindings bindings-swift bindings-kotlin \
 	sync patch unpatch xcgen ios-frameworks \
@@ -243,7 +243,10 @@ ios-run: ios
 	@open $(IOS_DIR)/Litter.xcodeproj
 
 android: android-fast
-android-fast: rust-android android-debug
+android-fast: rust-android android-tools android-debug
+android-tools:
+	@echo "==> Downloading bundled Android CLI tools..."
+	@$(ROOT)/tools/scripts/download-android-tools.sh
 android-emulator-fast:
 	@$(MAKE) android-fast ANDROID_ABIS="$(ANDROID_EMULATOR_ABIS)"
 android-emulator-run: android-emulator-fast
@@ -289,7 +292,7 @@ android-device-run: android-fast
 
 android-release: ANDROID_RUST_PROFILE=release
 android-release: ANDROID_ABIS=$(ANDROID_RELEASE_ABIS)
-android-release: rust-android
+android-release: rust-android android-tools
 	@echo "==> Building Android release..."
 	@cd $(ANDROID_DIR) && $(ANDROID_ENV) ./gradlew :app:assembleRelease
 
