@@ -150,13 +150,13 @@ $(shell mkdir -p $(STAMPS))
 
 .PHONY: all ios ios-sim ios-sim-fast ios-sim-run ios-device ios-device-fast ios-device-run ios-device-stop ios-run verify-ios-project catalyst catalyst-run \
 	android android-fast android-tools android-emulator-fast android-emulator-run android-device-run android-release android-debug android-install android-emulator-install \
-	rust-ios rust-ios-package rust-ios-device-release rust-ios-device-fast rust-ios-sim-fast rust-android rust-check rust-test rust-host-dev \
+	rust-ios rust-ios-package rust-ios-device-release rust-mac-release rust-ios-device-fast rust-ios-sim-fast rust-android rust-check rust-test rust-host-dev \
 	bindings bindings-swift bindings-kotlin \
 	sync patch unpatch xcgen ios-frameworks \
 	ios-build ios-build-sim ios-build-sim-fast ios-build-device ios-build-device-fast \
 	watch watch-sim watch-sim-run watch-device watch-typecheck \
 	test test-rust test-ios test-android \
-	testflight appstore-release play-upload play-release \
+	ios-release-prep mac-release-prep testflight mac-testflight mac-direct-dist appstore-release play-upload play-release \
 	clean clean-rust clean-ios clean-android \
 	rebuild-bindings tui tui-run help
 
@@ -305,6 +305,10 @@ rust-ios-package: $(STAMP_SYNC)
 rust-ios-device-release: $(STAMP_SYNC)
 	@echo "==> Building Rust for iOS release archive prep (device staticlib + headers)..."
 	@cd $(ROOT) && $(PACKAGE_CARGO_ENV) $(IOS_SCRIPTS)/build-rust.sh --preserve-current --device-only $(CARGO_FEATURES)
+
+rust-mac-release: $(STAMP_SYNC)
+	@echo "==> Building Rust for Mac Catalyst release archive prep (macabi staticlib + headers)..."
+	@cd $(ROOT) && $(PACKAGE_CARGO_ENV) $(IOS_SCRIPTS)/build-rust.sh --preserve-current --macabi-only $(CARGO_FEATURES)
 
 rust-ios-device-fast: $(STAMP_SYNC)
 	@echo "==> Building Rust for fast iOS device iteration (raw staticlib + headers)..."
@@ -547,9 +551,22 @@ test-android:
 
 ios-release-prep: rust-ios-device-release ios-frameworks xcgen
 
+# LitterMac excludes ios_system from its sources, so ios-frameworks is not
+# a dependency — only the macabi rust staticlib + regenerated Xcode project
+# are needed before archiving.
+mac-release-prep: rust-mac-release xcgen
+
 testflight: ios-release-prep
 	@echo "==> Uploading to TestFlight..."
 	@$(IOS_SCRIPTS)/testflight-upload.sh
+
+mac-testflight: mac-release-prep
+	@echo "==> Uploading Mac Catalyst build to TestFlight..."
+	@$(IOS_SCRIPTS)/testflight-upload-mac.sh
+
+mac-direct-dist: mac-release-prep
+	@echo "==> Building notarized Mac Catalyst DMG for direct distribution..."
+	@$(IOS_SCRIPTS)/direct-dist-mac.sh
 
 appstore-release: ios-release-prep
 	@echo "==> Submitting current repo version to the App Store..."

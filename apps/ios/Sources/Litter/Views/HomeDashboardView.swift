@@ -299,7 +299,7 @@ struct HomeDashboardView: View {
                         onRemove: { session in
                             onUnpinThread(session.key)
                         },
-                        contentInsets: EdgeInsets(top: 48, leading: 0, bottom: 140, trailing: 0)
+                        contentInsets: EdgeInsets(top: 48, leading: 0, bottom: chrome == .full ? 140 : 80, trailing: 0)
                     )
                 }
                 .transition(.opacity)
@@ -309,8 +309,11 @@ struct HomeDashboardView: View {
         }
         .overlay(alignment: .top) { topChrome }
         .overlay(alignment: .bottom) {
-            if chrome == .full {
+            switch chrome {
+            case .full:
                 bottomChrome
+            case .sidebar:
+                sidebarBottomChrome
             }
         }
     }
@@ -332,6 +335,32 @@ struct HomeDashboardView: View {
             onAdd: onAddServer
         )
         .frame(maxWidth: .infinity)
+    }
+
+    /// Sidebar chrome gets a compact search-only bar at the bottom —
+    /// tapping the magnifying glass morphs it into a search field, which
+    /// swaps the sessions list for `ThreadSearchResultsView` (the canvas
+    /// already keys on `isSearchExpanded` regardless of chrome). The
+    /// close button on the search field restores the sessions list.
+    private var sidebarBottomChrome: some View {
+        HomeBottomBar(
+            mode: $inputMode,
+            searchQuery: $searchQuery,
+            project: nil,
+            onThreadCreated: { _ in },
+            compact: true
+        )
+        .padding(.bottom, 4)
+        .background(
+            LinearGradient(
+                colors: Array(LitterTheme.headerScrim.reversed()),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .padding(.top, -30)
+            .ignoresSafeArea(.container, edges: .bottom)
+            .allowsHitTesting(false)
+        )
     }
 
     private var bottomChrome: some View {
