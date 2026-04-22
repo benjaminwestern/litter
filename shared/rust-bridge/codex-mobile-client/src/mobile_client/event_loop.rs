@@ -11,6 +11,19 @@ enum IpcStreamProcessorMessage {
 const IPC_STREAM_BATCH_COLLECT_WINDOW: Duration = Duration::from_millis(50);
 const IPC_STALE_TURN_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const IPC_STALE_TURN_QUIET_THRESHOLD: Duration = Duration::from_secs(5);
+const PATH_FIELD_KEYS: &[&str] = &[
+    "agentPath",
+    "cwd",
+    "destinationPath",
+    "instructionSources",
+    "marketplacePath",
+    "movePath",
+    "path",
+    "readableRoots",
+    "savedPath",
+    "sourcePath",
+    "writableRoots",
+];
 
 struct IpcStreamProcessorState {
     bridge: IpcBridge,
@@ -543,8 +556,9 @@ impl MobileClient {
         );
         self.app_store.note_server_direct_request_success(server_id);
         serde_json::from_value(value.clone()).map_err(|e| {
-            warn!("deserialize typed RPC response: {e}\nraw payload: {value}");
-            format!("deserialize typed RPC response: {e}")
+            let error = format_typed_rpc_deserialization_error(wire_method, &e, &value);
+            warn!("{error}\nraw payload: {value}");
+            error
         })
     }
 
@@ -585,6 +599,81 @@ impl MobileClient {
             crate::ffi::shared::shared_runtime().spawn(future);
         }
     }
+}
+
+fn format_typed_rpc_deserialization_error(
+    wire_method: &str,
+    error: &serde_json::Error,
+    value: &serde_json::Value,
+) -> String {
+    let mut message = format!("deserialize typed RPC response: {error}");
+    if error
+        .to_string()
+        .contains("AbsolutePathBuf deserialized without a base path")
+    {
+        let suspects = suspicious_relative_path_entries(value);
+        if !suspects.is_empty() {
+            message.push_str("; suspicious relative path fields: ");
+            message.push_str(&suspects.join(", "));
+        } else {
+            message.push_str("; no relative values found in known path fields");
+        }
+    }
+    format!("{message} [method={wire_method}]")
+}
+
+fn suspicious_relative_path_entries(value: &serde_json::Value) -> Vec<String> {
+    let mut entries = Vec::new();
+    collect_relative_path_entries(value, "$", None, &mut entries);
+    entries
+}
+
+fn collect_relative_path_entries(
+    value: &serde_json::Value,
+    path: &str,
+    active_field: Option<&str>,
+    entries: &mut Vec<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                let next_path = format!("{path}.{key}");
+                let next_active_field = if is_path_field_key(key) {
+                    Some(key.as_str())
+                } else {
+                    None
+                };
+                collect_relative_path_entries(child, &next_path, next_active_field, entries);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                let next_path = format!("{path}[{index}]");
+                collect_relative_path_entries(child, &next_path, active_field, entries);
+            }
+        }
+        serde_json::Value::String(text) => {
+            if active_field.is_some() && !looks_cross_platform_absolute(text) {
+                entries.push(format!("{path}={text:?}"));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_path_field_key(key: &str) -> bool {
+    PATH_FIELD_KEYS.contains(&key)
+}
+
+fn looks_cross_platform_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.starts_with(b"/") || bytes.starts_with(b"\\\\") {
+        return true;
+    }
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
 fn process_ipc_stream_processor_messages(
@@ -917,5 +1006,59 @@ fn client_request_wire_method(request: &upstream::ClientRequest) -> &'static str
         upstream::ClientRequest::TurnSteer { .. } => "turn/steer",
         upstream::ClientRequest::CollaborationModeList { .. } => "collaboration_mode/list",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::de::Error as _;
+    use serde_json::json;
+
+    #[test]
+    fn suspicious_relative_path_entries_reports_relative_values_in_known_path_fields() {
+        let payload = json!({
+            "cwd": "/private/var/mobile/home/codex",
+            "instructionSources": [
+                "AGENTS.md",
+                "/private/var/mobile/home/codex/AGENTS.md"
+            ],
+            "sandbox": {
+                "type": "workspaceWrite",
+                "writableRoots": ["relative-root", "/private/var/mobile/home/codex"]
+            },
+            "thread": {
+                "cwd": "/private/var/mobile/home/codex",
+                "path": "threads/thread-123.json"
+            }
+        });
+
+        let entries = suspicious_relative_path_entries(&payload);
+
+        assert_eq!(
+            entries,
+            vec![
+                "$.instructionSources[0]=\"AGENTS.md\"",
+                "$.sandbox.writableRoots[0]=\"relative-root\"",
+                "$.thread.path=\"threads/thread-123.json\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn format_typed_rpc_deserialization_error_appends_relative_path_diagnostics() {
+        let payload = json!({
+            "instructionSources": ["AGENTS.md"]
+        });
+        let synthetic = serde_json::Error::custom(
+            "AbsolutePathBuf deserialized without a base path at line 1 column 2",
+        );
+        let message = format_typed_rpc_deserialization_error("thread/start", &synthetic, &payload);
+
+        assert!(
+            message.contains("$.instructionSources[0]=\"AGENTS.md\""),
+            "{message}"
+        );
+        assert!(message.contains("[method=thread/start]"), "{message}");
     }
 }
