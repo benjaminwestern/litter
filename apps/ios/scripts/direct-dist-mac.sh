@@ -193,16 +193,11 @@ if [[ -z "$APP_PATH" ]]; then
 fi
 echo "==> Exported app: $APP_PATH"
 
-# Verify the .app signature before wrapping — catches missing/expired certs
-# or broken provisioning profile embedding *before* we spend minutes on
-# notarization.
+# Verify the .app signature before wrapping. Gatekeeper assessment must wait
+# until after notarization; otherwise spctl correctly rejects valid Developer ID
+# apps as "Unnotarized Developer ID" before notarytool has run.
 echo "==> Verifying .app Developer ID signature"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-spctl --assess --type execute --verbose=4 "$APP_PATH" || {
-    echo "spctl assessment failed — app will not launch under Gatekeeper as-is." >&2
-    echo "Usually means the signature is wrong (wrong cert type, not Developer ID)." >&2
-    exit 1
-}
 
 DMG_NAME="${APP_DISPLAY_NAME}-${MARKETING_VERSION}-mac.dmg"
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
