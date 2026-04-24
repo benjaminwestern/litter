@@ -30,6 +30,8 @@ jobs:
     outputs:
       release_android: ${{ steps.filter.outputs.release_android }}
       release_ios: ${{ steps.filter.outputs.release_ios }}
+      release_mac_testflight: ${{ steps.filter.outputs.release_mac_testflight }}
+      release_mac_direct: ${{ steps.filter.outputs.release_mac_direct }}
       run_release: ${{ steps.resolve.outputs.run_release }}
 
     steps:
@@ -57,7 +59,46 @@ jobs:
               - 'Makefile'
               - '.github/workflows/mobile-release.yml'
               - '.github/workflows/ios-testflight.yml'
-              - 'apps/ios/**'
+              - 'apps/ios/project.yml'
+              - 'apps/ios/Resources/**'
+              - 'apps/ios/Sources/**'
+              - 'apps/ios/Tests/**'
+              - 'apps/ios/scripts/app-store-release.sh'
+              - 'apps/ios/scripts/build-rust.sh'
+              - 'apps/ios/scripts/download-ios-system.sh'
+              - 'apps/ios/scripts/regenerate-project.sh'
+              - 'apps/ios/scripts/release-common.sh'
+              - 'apps/ios/scripts/sanitize-ios-frameworks.sh'
+              - 'apps/ios/scripts/sync-codex.sh'
+              - 'apps/ios/scripts/testflight-upload.sh'
+              - 'shared/rust-bridge/**'
+              - 'shared/third_party/codex'
+              - 'patches/codex/**'
+            release_mac_testflight:
+              - 'Makefile'
+              - '.github/workflows/mobile-release.yml'
+              - '.github/workflows/mac-testflight.yml'
+              - 'apps/ios/project.yml'
+              - 'apps/ios/Sources/**'
+              - 'apps/ios/scripts/build-rust.sh'
+              - 'apps/ios/scripts/regenerate-project.sh'
+              - 'apps/ios/scripts/release-common.sh'
+              - 'apps/ios/scripts/sync-codex.sh'
+              - 'apps/ios/scripts/testflight-upload-mac.sh'
+              - 'shared/rust-bridge/**'
+              - 'shared/third_party/codex'
+              - 'patches/codex/**'
+            release_mac_direct:
+              - 'Makefile'
+              - '.github/workflows/mobile-release.yml'
+              - '.github/workflows/mac-direct-dist.yml'
+              - 'apps/ios/project.yml'
+              - 'apps/ios/Sources/**'
+              - 'apps/ios/scripts/build-rust.sh'
+              - 'apps/ios/scripts/direct-dist-mac.sh'
+              - 'apps/ios/scripts/regenerate-project.sh'
+              - 'apps/ios/scripts/release-common.sh'
+              - 'apps/ios/scripts/sync-codex.sh'
               - 'shared/rust-bridge/**'
               - 'shared/third_party/codex'
               - 'patches/codex/**'
@@ -67,9 +108,11 @@ jobs:
         env:
           RELEASE_ANDROID: ${{ steps.filter.outputs.release_android }}
           RELEASE_IOS: ${{ steps.filter.outputs.release_ios }}
+          RELEASE_MAC_TESTFLIGHT: ${{ steps.filter.outputs.release_mac_testflight }}
+          RELEASE_MAC_DIRECT: ${{ steps.filter.outputs.release_mac_direct }}
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_ANDROID" == "true" || "$RELEASE_IOS" == "true" ]]; then
+          if [[ "$RELEASE_ANDROID" == "true" || "$RELEASE_IOS" == "true" || "$RELEASE_MAC_TESTFLIGHT" == "true" || "$RELEASE_MAC_DIRECT" == "true" ]]; then
             echo "run_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "run_release=false" >> "$GITHUB_OUTPUT"
@@ -710,7 +753,7 @@ jobs:
 
   mac-release-prep:
     needs: [detect-release-changes, shared-prep]
-    if: needs.detect-release-changes.outputs.release_ios == 'true'
+    if: needs.detect-release-changes.outputs.release_mac_testflight == 'true' || needs.detect-release-changes.outputs.release_mac_direct == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -798,7 +841,7 @@ jobs:
 
   upload-mac-testflight:
     needs: [detect-release-changes, mac-release-prep]
-    if: needs.detect-release-changes.outputs.release_ios == 'true'
+    if: needs.detect-release-changes.outputs.release_mac_testflight == 'true'
     runs-on: macos-26
     timeout-minutes: 150
     environment: release
@@ -969,7 +1012,7 @@ jobs:
     # Developer ID. Skipped if the Developer ID secrets aren't set, so
     # it's safe to leave wired before you've set up direct dist.
     needs: [detect-release-changes, mac-release-prep]
-    if: needs.detect-release-changes.outputs.release_ios == 'true'
+    if: needs.detect-release-changes.outputs.release_mac_direct == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     environment: release
