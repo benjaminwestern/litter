@@ -3,6 +3,7 @@ name = "codex-ipc"
 version = "0.1.0"
 edition = "2024"
 description = "Rust implementation of the Codex Local IPC protocol"
+license-file = "../../../LICENSE"
 
 [lib]
 name = "codex_ipc"

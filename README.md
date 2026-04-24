@@ -52,6 +52,10 @@ tools/scripts/             Cross-platform helper scripts
 
 Both platforms share a single Rust core (`codex-mobile-client`) via UniFFI-generated bindings. Platform code (Swift/Kotlin) stays thin: UI, permissions, notifications, and platform APIs only. Session state, streaming, hydration, discovery, and auth logic live in Rust.
 
+## License
+
+Litter is licensed under the GNU General Public License version 3 with an additional permission under GPLv3 section 7 for Apple App Store and Google Play distribution. See [LICENSE](LICENSE).
+
 ## Make Targets
 
 | Target | Description |

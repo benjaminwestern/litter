@@ -3,6 +3,7 @@ name = "codex-mobile-client"
 version = "0.1.0"
 edition = "2024"
 description = "Shared mobile client library for Codex iOS and Android apps"
+license-file = "../../../LICENSE"
 
 [lib]
 name = "codex_mobile_client"
